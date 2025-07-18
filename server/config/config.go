@@ -51,6 +51,12 @@ const (
 	// DefaultJsonRPCMetricsAddress is the default address the JSON-RPC Metrics server binds to.
 	DefaultJSONRPCMetricsAddress = "127.0.0.1:6065"
 
+	// DefaultPprofEnable is the default flag for enabling the pprof server
+	DefaultPprofEnable = false
+
+	// DefaultPprofAddress is the default pprof server address
+	DefaultPprofAddress = "localhost:6060"
+
 	// DefaultEVMTracer is the default vm.Tracer type
 	DefaultEVMTracer = ""
 
@@ -116,6 +122,7 @@ type Config struct {
 	EVM     EVMConfig     `mapstructure:"evm"`
 	JSONRPC JSONRPCConfig `mapstructure:"json-rpc"`
 	TLS     TLSConfig     `mapstructure:"tls"`
+	Pprof   PprofConfig   `mapstructure:"pprof"`
 }
 
 // EVMConfig defines the application configuration values for the EVM.
@@ -181,6 +188,14 @@ type TLSConfig struct {
 	CertificatePath string `mapstructure:"certificate-path"`
 	// KeyPath the file path for the key .pem file
 	KeyPath string `mapstructure:"key-path"`
+}
+
+// PprofConfig defines the configuration for the pprof HTTP server.
+type PprofConfig struct {
+	// Enable specifies if the pprof server should be started
+	Enable bool `mapstructure:"enable"`
+	// Address defines the listening address for the pprof server
+	Address string `mapstructure:"address"`
 }
 
 // DefaultEVMConfig returns the default EVM configuration
@@ -296,6 +311,14 @@ func DefaultTLSConfig() *TLSConfig {
 	}
 }
 
+// DefaultPprofConfig returns the default pprof configuration.
+func DefaultPprofConfig() *PprofConfig {
+	return &PprofConfig{
+		Enable:  DefaultPprofEnable,
+		Address: DefaultPprofAddress,
+	}
+}
+
 // Validate returns an error if the TLS certificate and key file extensions are invalid.
 func (c TLSConfig) Validate() error {
 	certExt := path.Ext(c.CertificatePath)
@@ -326,6 +349,7 @@ func DefaultConfig() *Config {
 		EVM:     *DefaultEVMConfig(),
 		JSONRPC: *DefaultJSONRPCConfig(),
 		TLS:     *DefaultTLSConfig(),
+		Pprof:   *DefaultPprofConfig(),
 	}
 }
 
@@ -350,6 +374,10 @@ func (c Config) ValidateBasic() error {
 
 	if err := c.TLS.Validate(); err != nil {
 		return errorsmod.Wrapf(errortypes.ErrAppConfig, "invalid tls config value: %s", err.Error())
+	}
+
+	if c.Pprof.Enable && c.Pprof.Address == "" {
+		return errorsmod.Wrapf(errortypes.ErrAppConfig, "invalid pprof config value: address cannot be empty")
 	}
 
 	return c.Config.ValidateBasic()

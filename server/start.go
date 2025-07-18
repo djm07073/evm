@@ -2,10 +2,12 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	_ "net/http/pprof"
 	"os"
 	"path/filepath"
 	"runtime/pprof"
@@ -207,6 +209,9 @@ which accepts a path for the resulting pprof file.
 	cmd.Flags().String(srvflags.TLSCertPath, "", "the cert.pem file path for the server TLS configuration")
 	cmd.Flags().String(srvflags.TLSKeyPath, "", "the key.pem file path for the server TLS configuration")
 
+	cmd.Flags().Bool(srvflags.PprofEnable, cosmosevmserverconfig.DefaultPprofEnable, "Define if the pprof server should be enabled")
+	cmd.Flags().String(srvflags.PprofAddress, cosmosevmserverconfig.DefaultPprofAddress, "the pprof server address to listen on")
+
 	cmd.Flags().Uint64(server.FlagStateSyncSnapshotInterval, 0, "State sync snapshot interval")
 	cmd.Flags().Uint32(server.FlagStateSyncSnapshotKeepRecent, 2, "State sync snapshot to keep")
 
@@ -259,6 +264,8 @@ func startStandAlone(svrCtx *server.Context, opts StartOptions) error {
 		return err
 	}
 
+	pprofSrv := startPprofServer(ctx, svrCtx, g, config.Config.Pprof)
+
 	cmtApp := server.NewCometABCIWrapper(app)
 	svr, err := abciserver.NewServer(addr, transport, cmtApp)
 	if err != nil {
@@ -280,6 +287,16 @@ func startStandAlone(svrCtx *server.Context, opts StartOptions) error {
 		svrCtx.Logger.Info("stopping the ABCI server...")
 		return svr.Stop()
 	})
+
+	if pprofSrv != nil {
+		defer func() {
+			shutdownCtx, cancelFn := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancelFn()
+			if err := pprofSrv.Shutdown(shutdownCtx); err != nil {
+				svrCtx.Logger.Error("pprof server shutdown produced a warning", "error", err.Error())
+			}
+		}()
+	}
 
 	return g.Wait()
 }
@@ -413,6 +430,8 @@ func startInProcess(svrCtx *server.Context, clientCtx client.Context, opts Start
 		return err
 	}
 
+	pprofSrv := startPprofServer(ctx, svrCtx, g, config.Config.Pprof)
+
 	// Enable metrics if JSONRPC is enabled and --metrics is passed
 	// Flag not added in config to avoid user enabling in config without passing in CLI
 	if config.JSONRPC.Enable && svrCtx.Viper.GetBool(srvflags.JSONRPCEnableMetrics) {
@@ -479,6 +498,16 @@ func startInProcess(svrCtx *server.Context, clientCtx client.Context, opts Start
 		}()
 	}
 
+	if pprofSrv != nil {
+		defer func() {
+			shutdownCtx, cancelFn := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancelFn()
+			if err := pprofSrv.Shutdown(shutdownCtx); err != nil {
+				logger.Error("pprof server shutdown produced a warning", "error", err.Error())
+			}
+		}()
+	}
+
 	// At this point it is safe to block the process if we're in query only mode as
 	// we do not need to start Rosetta or handle any CometBFT related processes.
 	if gRPCOnly {
@@ -519,6 +548,25 @@ func startTelemetry(cfg cosmosevmserverconfig.Config) (*telemetry.Metrics, error
 		return nil, nil
 	}
 	return telemetry.New(cfg.Telemetry)
+}
+
+func startPprofServer(ctx context.Context, svrCtx *server.Context, g *errgroup.Group, cfg cosmosevmserverconfig.PprofConfig) *http.Server {
+	if !cfg.Enable {
+		return nil
+	}
+
+	srv := &http.Server{Addr: cfg.Address}
+
+	g.Go(func() error {
+		svrCtx.Logger.Info("starting pprof server", "address", cfg.Address)
+		err := srv.ListenAndServe()
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			return err
+		}
+		return nil
+	})
+
+	return srv
 }
 
 func getCtx(svrCtx *server.Context, block bool) (*errgroup.Group, context.Context) {

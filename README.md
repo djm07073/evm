@@ -144,7 +144,19 @@ thus moving the standard forward.
 ## Getting started
 
 To run the example `evmd` chain, run the script using `./local_node.sh`
-from the root folder of the respository.
+from the root folder of the repository.
+
+`local_node.sh` starts the node with a built‑in pprof server listening on
+`localhost:6060`. While the node is running you can capture CPU and memory
+profiles with the following commands:
+
+```bash
+go tool pprof http://localhost:6060/debug/pprof/profile?seconds=30
+go tool pprof http://localhost:6060/debug/pprof/heap
+```
+
+These profiles can be collected during a Foundry load test to identify
+bottlenecks in CPU, memory, or IO.
 
 ### Testing
 

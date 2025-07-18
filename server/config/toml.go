@@ -100,4 +100,16 @@ certificate-path = "{{ .TLS.CertificatePath }}"
 
 # Key path defines the key.pem file path for the TLS configuration.
 key-path = "{{ .TLS.KeyPath }}"
+
+###############################################################################
+###                             Pprof Configuration                         ###
+###############################################################################
+
+[pprof]
+
+# Enable defines if the pprof server should be enabled.
+enable = {{ .Pprof.Enable }}
+
+# Address defines the pprof server address to bind to.
+address = "{{ .Pprof.Address }}"
 `

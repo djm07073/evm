@@ -14,6 +14,10 @@ HOMEDIR="$HOME/.evmd"
 
 BASEFEE=10000000
 
+# Pprof variables
+PPROF_ADDR="localhost:6060"
+PPROF_ENABLE=true
+
 # Path variables
 CONFIG=$HOMEDIR/config/config.toml
 APP_TOML=$HOMEDIR/config/app.toml
@@ -224,6 +228,8 @@ fi
 evmd start "$TRACE" \
 	--log_level $LOGLEVEL \
 	--minimum-gas-prices=0.0001atest \
-	--home "$HOMEDIR" \
-	--json-rpc.api eth,txpool,personal,net,debug,web3 \
-	--chain-id "$CHAINID"
+        --home "$HOMEDIR" \
+        --json-rpc.api eth,txpool,personal,net,debug,web3 \
+        --pprof.enable=$PPROF_ENABLE \
+        --pprof.address $PPROF_ADDR \
+        --chain-id "$CHAINID"

@@ -96,6 +96,7 @@ func InitAppConfig(denom string, evmChainID uint64) (string, interface{}) {
 		EVM     cosmosevmserverconfig.EVMConfig
 		JSONRPC cosmosevmserverconfig.JSONRPCConfig
 		TLS     cosmosevmserverconfig.TLSConfig
+		Pprof   cosmosevmserverconfig.PprofConfig
 	}
 
 	// Optionally allow the chain developer to overwrite the SDK's default
@@ -123,6 +124,7 @@ func InitAppConfig(denom string, evmChainID uint64) (string, interface{}) {
 		EVM:     *evmCfg,
 		JSONRPC: *cosmosevmserverconfig.DefaultJSONRPCConfig(),
 		TLS:     *cosmosevmserverconfig.DefaultTLSConfig(),
+		Pprof:   *cosmosevmserverconfig.DefaultPprofConfig(),
 	}
 
 	customAppTemplate := serverconfig.DefaultConfigTemplate +
