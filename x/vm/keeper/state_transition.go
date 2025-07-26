@@ -1,7 +1,9 @@
 package keeper
 
 import (
+	"context"
 	"math/big"
+	"runtime/pprof"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core"
@@ -148,21 +150,43 @@ func (k Keeper) GetHashFn(ctx sdk.Context) vm.GetHashFunc {
 //
 // For relevant discussion see: https://github.com/cosmos/cosmos-sdk/discussions/9072
 func (k *Keeper) ApplyTransaction(ctx sdk.Context, msgEth *types.MsgEthereumTx) (*types.MsgEthereumTxResponse, error) {
+	ppctx := pprof.WithLabels(ctx.Context(), pprof.Labels("ApplyTransaction", "Setup"))
+	ctx = ctx.WithContext(ppctx)
+	
 	var (
 		bloom        *big.Int
 		bloomReceipt ethtypes.Bloom
 	)
 
-	cfg, err := k.EVMConfig(ctx, sdk.ConsAddress(ctx.BlockHeader().ProposerAddress))
+	var cfg *statedb.EVMConfig
+	var err error
+	evmConfigLabels := pprof.Labels("ApplyTransaction", "LoadEVMConfig")
+	pprof.Do(ctx.Context(), evmConfigLabels, func(ppctx context.Context) {
+		ctx = ctx.WithContext(ppctx)
+		cfg, err = k.EVMConfig(ctx, sdk.ConsAddress(ctx.BlockHeader().ProposerAddress))
+	})
 	if err != nil {
 		return nil, errorsmod.Wrap(err, "failed to load evm config")
 	}
-	ethTx := msgEth.AsTransaction()
-	txConfig := k.TxConfig(ctx, ethTx.Hash())
+	
+	var ethTx *ethtypes.Transaction
+	var txConfig statedb.TxConfig
+	txConfigLabels := pprof.Labels("ApplyTransaction", "CreateTxConfig")
+	pprof.Do(ctx.Context(), txConfigLabels, func(ppctx context.Context) {
+		ctx = ctx.WithContext(ppctx)
+		ethTx = msgEth.AsTransaction()
+		txConfig = k.TxConfig(ctx, ethTx.Hash())
+	})
 
-	// get the signer according to the chain rules from the config and block height
-	signer := ethtypes.MakeSigner(types.GetEthChainConfig(), big.NewInt(ctx.BlockHeight()), uint64(ctx.BlockTime().Unix())) //#nosec G115 -- int overflow is not a concern here
-	msg, err := core.TransactionToMessage(ethTx, signer, cfg.BaseFee)
+	var msg *core.Message
+	var signer ethtypes.Signer
+	signerLabels := pprof.Labels("ApplyTransaction", "CreateSignerAndMessage")
+	pprof.Do(ctx.Context(), signerLabels, func(ppctx context.Context) {
+		ctx = ctx.WithContext(ppctx)
+		// get the signer according to the chain rules from the config and block height
+		signer = ethtypes.MakeSigner(types.GetEthChainConfig(), big.NewInt(ctx.BlockHeight()), uint64(ctx.BlockTime().Unix())) //#nosec G115 -- int overflow is not a concern here
+		msg, err = core.TransactionToMessage(ethTx, signer, cfg.BaseFee)
+	})
 	if err != nil {
 		return nil, errorsmod.Wrap(err, "failed to return ethereum transaction as core message")
 	}
@@ -172,8 +196,12 @@ func (k *Keeper) ApplyTransaction(ctx sdk.Context, msgEth *types.MsgEthereumTx) 
 	// thus restricted to be used only inside `ApplyMessage`.
 	tmpCtx, commit := ctx.CacheContext()
 
-	// pass true to commit the StateDB
-	res, err := k.ApplyMessageWithConfig(tmpCtx, *msg, nil, true, cfg, txConfig)
+	var res *types.MsgEthereumTxResponse
+	applyMsgLabels := pprof.Labels("ApplyTransaction", "ApplyMessageWithConfig")
+	pprof.Do(tmpCtx.Context(), applyMsgLabels, func(ppctx context.Context) {
+		tmpCtx = tmpCtx.WithContext(ppctx)
+		res, err = k.ApplyMessageWithConfig(tmpCtx, *msg, nil, true, cfg, txConfig)
+	})
 	if err != nil {
 		// when a transaction contains multiple msg, as long as one of the msg fails
 		// all gas will be deducted. so is not msg.Gas()
@@ -233,7 +261,10 @@ func (k *Keeper) ApplyTransaction(ctx sdk.Context, msgEth *types.MsgEthereumTx) 
 			// If the tx failed in post processing hooks, we should clear the logs
 			res.Logs = nil
 		} else if commit != nil {
-			commit()
+			commitLabels := pprof.Labels("ApplyTransaction", "CommitContext")
+			pprof.Do(ctx.Context(), commitLabels, func(ppctx context.Context) {
+				commit()
+			})
 
 			// Since the post-processing can alter the log, we need to update the result
 			res.Logs = types.NewLogsFromEth(receipt.Logs)
@@ -243,13 +274,8 @@ func (k *Keeper) ApplyTransaction(ctx sdk.Context, msgEth *types.MsgEthereumTx) 
 
 	evmDenom := types.GetEVMCoinDenom()
 
-	// refund gas in order to match the Ethereum gas consumption instead of the default SDK one.
-	remainingGas := uint64(0)
-	if msg.GasLimit > res.GasUsed {
-		remainingGas = msg.GasLimit - res.GasUsed
-	}
-	if err = k.RefundGas(ctx, *msg, remainingGas, evmDenom); err != nil {
-		return nil, errorsmod.Wrapf(err, "failed to refund gas leftover gas to sender %s", msg.From)
+	if err = k.SettleTransactionFee(ctx, *msg, res.GasUsed, evmDenom); err != nil {
+		return nil, errorsmod.Wrapf(err, "failed to settle fee for sender %s", msg.From)
 	}
 
 	if len(logs) > 0 {
@@ -329,13 +355,21 @@ func (k *Keeper) ApplyMessageWithConfig(
 	cfg *statedb.EVMConfig,
 	txConfig statedb.TxConfig,
 ) (*types.MsgEthereumTxResponse, error) {
+	ppctx := pprof.WithLabels(ctx.Context(), pprof.Labels("ApplyMessageWithConfig", "Setup"))
+	ctx = ctx.WithContext(ppctx)
+	
 	var (
 		ret   []byte // return bytes from evm execution
 		vmErr error  // vm errors do not effect consensus and are therefore not assigned to err
 	)
 
-	stateDB := statedb.New(ctx, k, txConfig)
-	evm := k.NewEVM(ctx, msg, cfg, tracer, stateDB)
+	var stateDB *statedb.StateDB
+	var evm *vm.EVM
+	pprof.Do(ctx.Context(), pprof.Labels("ApplyMessageWithConfig", "SetupEVMAndStateDB"), func(ppctx context.Context) {
+		ctx = ctx.WithContext(ppctx)
+		stateDB = statedb.New(ctx, k, txConfig)
+		evm = k.NewEVM(ctx, msg, cfg, tracer, stateDB)
+	})
 
 	leftoverGas := msg.GasLimit
 
@@ -360,10 +394,15 @@ func (k *Keeper) ApplyMessageWithConfig(
 	contractCreation := msg.To == nil
 	isLondon := ethCfg.IsLondon(evm.Context.BlockNumber)
 
-	intrinsicGas, err := k.GetEthIntrinsicGas(ctx, msg, ethCfg, contractCreation)
-	if err != nil {
+	var intrinsicGas uint64
+	var intrinsicErr error
+	pprof.Do(ctx.Context(), pprof.Labels("ApplyMessageWithConfig", "GetEthIntrinsicGas"), func(ppctx context.Context) {
+		ctx = ctx.WithContext(ppctx)
+		intrinsicGas, intrinsicErr = k.GetEthIntrinsicGas(ctx, msg, ethCfg, contractCreation)
+	})
+	if intrinsicErr != nil {
 		// should have already been checked on Ante Handler
-		return nil, errorsmod.Wrap(err, "intrinsic gas failed")
+		return nil, errorsmod.Wrap(intrinsicErr, "intrinsic gas failed")
 	}
 
 	// Should check again even if it is checked on Ante Handler, because eth_call don't go through Ante Handler.
@@ -375,8 +414,10 @@ func (k *Keeper) ApplyMessageWithConfig(
 
 	// access list preparation is moved from ante handler to here, because it's needed when `ApplyMessage` is called
 	// under contexts where ante handlers are not run, for example `eth_call` and `eth_estimateGas`.
-	rules := ethCfg.Rules(big.NewInt(ctx.BlockHeight()), true, uint64(ctx.BlockTime().Unix())) //#nosec G115 -- int overflow is not a concern here
-	stateDB.Prepare(rules, msg.From, common.Address{}, msg.To, evm.ActivePrecompiles(), msg.AccessList)
+	pprof.Do(ctx.Context(), pprof.Labels("ApplyMessageWithConfig", "StateDBPrepare"), func(ppctx context.Context) {
+		rules := ethCfg.Rules(big.NewInt(ctx.BlockHeight()), true, uint64(ctx.BlockTime().Unix())) //#nosec G115 -- int overflow is not a concern here
+		stateDB.Prepare(rules, msg.From, common.Address{}, msg.To, evm.ActivePrecompiles(), msg.AccessList)
+	})
 
 	convertedValue, err := utils.Uint256FromBigInt(msg.Value)
 	if err != nil {
@@ -384,14 +425,18 @@ func (k *Keeper) ApplyMessageWithConfig(
 	}
 
 	if contractCreation {
-		// take over the nonce management from evm:
-		// - reset sender's nonce to msg.Nonce() before calling evm.
-		// - increase sender's nonce by one no matter the result.
-		stateDB.SetNonce(sender.Address(), msg.Nonce, tracing.NonceChangeEoACall)
-		ret, _, leftoverGas, vmErr = evm.Create(sender.Address(), msg.Data, leftoverGas, convertedValue)
-		stateDB.SetNonce(sender.Address(), msg.Nonce+1, tracing.NonceChangeContractCreator)
+		pprof.Do(ctx.Context(), pprof.Labels("ApplyMessageWithConfig", "ExecuteEVM"), func(ppctx context.Context) {
+			// take over the nonce management from evm:
+			// - reset sender's nonce to msg.Nonce() before calling evm.
+			// - increase sender's nonce by one no matter the result.
+			stateDB.SetNonce(sender.Address(), msg.Nonce, tracing.NonceChangeEoACall)
+			ret, _, leftoverGas, vmErr = evm.Create(sender.Address(), msg.Data, leftoverGas, convertedValue)
+			stateDB.SetNonce(sender.Address(), msg.Nonce+1, tracing.NonceChangeContractCreator)
+		})
 	} else {
-		ret, leftoverGas, vmErr = evm.Call(sender.Address(), *msg.To, msg.Data, leftoverGas, convertedValue)
+		pprof.Do(ctx.Context(), pprof.Labels("ApplyMessageWithConfig", "ExecuteEVM"), func(ppctx context.Context) {
+			ret, leftoverGas, vmErr = evm.Call(sender.Address(), *msg.To, msg.Data, leftoverGas, convertedValue)
+		})
 	}
 
 	refundQuotient := params.RefundQuotient
@@ -421,8 +466,12 @@ func (k *Keeper) ApplyMessageWithConfig(
 
 	// The dirty states in `StateDB` is either committed or discarded after return
 	if commit {
-		if err := stateDB.Commit(); err != nil {
-			return nil, errorsmod.Wrap(err, "failed to commit stateDB")
+		var commitErr error
+		pprof.Do(ctx.Context(), pprof.Labels("ApplyMessageWithConfig", "CommitStateDB"), func(ppctx context.Context) {
+			commitErr = stateDB.Commit()
+		})
+		if commitErr != nil {
+			return nil, errorsmod.Wrap(commitErr, "failed to commit stateDB")
 		}
 	}
 

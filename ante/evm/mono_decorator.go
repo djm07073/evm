@@ -1,9 +1,12 @@
 package evm
 
 import (
+	"context"
 	"math/big"
+	"runtime/pprof"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core"
 	ethtypes "github.com/ethereum/go-ethereum/core/types"
 
 	anteinterfaces "github.com/cosmos/evm/ante/interfaces"
@@ -49,211 +52,299 @@ func NewEVMMonoDecorator(
 
 // AnteHandle handles the entire decorator chain using a mono decorator.
 func (md MonoDecorator) AnteHandle(ctx sdk.Context, tx sdk.Tx, simulate bool, next sdk.AnteHandler) (newCtx sdk.Context, err error) {
-	// 0. Basic validation of the transaction
-	var txFeeInfo *txtypes.Fee
-	if !ctx.IsReCheckTx() {
-		// NOTE: txFeeInfo is associated with the Cosmos stack, not the EVM. For
-		// this reason, the fee is represented in the original decimals and
-		// should be converted later when used.
-		txFeeInfo, err = ValidateTx(tx)
+	// Start with base context that has main label
+	ppctx := pprof.WithLabels(ctx.Context(), pprof.Labels("Ante Handler", "Main"))
+	ctx = ctx.WithContext(ppctx)
+		
+		// 0. Basic validation of the transaction
+		var txFeeInfo *txtypes.Fee
+		if !ctx.IsReCheckTx() {
+			// NOTE: txFeeInfo is associated with the Cosmos stack, not the EVM. For
+			// this reason, the fee is represented in the original decimals and
+			// should be converted later when used.
+			validateTxLabels := pprof.Labels("Ante Handler", "ValidateTx")
+			pprof.Do(ctx.Context(), validateTxLabels, func(ctx2 context.Context) {
+				txFeeInfo, err = ValidateTx(tx)
+			})
+			if err != nil {
+				return
+			}
+		}
+
+		evmDenom := evmtypes.GetEVMCoinDenom()
+
+		// 1. setup ctx
+		setupCtxLabels := pprof.Labels("Ante Handler", "SetupContextAndResetTransientGas")
+		var setupCtx sdk.Context
+		pprof.Do(ctx.Context(), setupCtxLabels, func(ctx2 context.Context) {
+			setupCtx, err = SetupContextAndResetTransientGas(ctx.WithContext(ctx2), tx, md.evmKeeper)
+		})
 		if err != nil {
-			return ctx, err
+			return
 		}
-	}
+		ctx = setupCtx
 
-	evmDenom := evmtypes.GetEVMCoinDenom()
-
-	// 1. setup ctx
-	ctx, err = SetupContextAndResetTransientGas(ctx, tx, md.evmKeeper)
-	if err != nil {
-		return ctx, err
-	}
-
-	// 2. get utils
-	decUtils, err := NewMonoDecoratorUtils(ctx, md.evmKeeper)
-	if err != nil {
-		return ctx, err
-	}
-
-	// NOTE: the protocol does not support multiple EVM messages currently so
-	// this loop will complete after the first message.
-	msgs := tx.GetMsgs()
-	if len(msgs) != 1 {
-		return ctx, errorsmod.Wrapf(errortypes.ErrInvalidRequest, "expected 1 message, got %d", len(msgs))
-	}
-	msgIndex := 0
-
-	ethMsg, txData, err := evmtypes.UnpackEthMsg(msgs[msgIndex])
-	if err != nil {
-		return ctx, err
-	}
-
-	feeAmt := txData.Fee()
-	gas := txData.GetGas()
-	fee := sdkmath.LegacyNewDecFromBigInt(feeAmt)
-	gasLimit := sdkmath.LegacyNewDecFromBigInt(new(big.Int).SetUint64(gas))
-
-	// TODO: computation for mempool and global fee can be made using only
-	// the price instead of the fee. This would save some computation.
-	//
-	// 2. mempool inclusion fee
-	if ctx.IsCheckTx() && !simulate {
-		// FIX: Mempool dec should be converted
-		if err := CheckMempoolFee(fee, decUtils.MempoolMinGasPrice, gasLimit, decUtils.Rules.IsLondon); err != nil {
-			return ctx, err
+		// 2. get utils
+		var decUtils *DecoratorUtils
+		utilsLabels := pprof.Labels("Ante Handler", "NewMonoDecoratorUtils")
+		pprof.Do(ctx.Context(), utilsLabels, func(ctx2 context.Context) {
+			decUtils, err = NewMonoDecoratorUtils(ctx.WithContext(ctx2), md.evmKeeper)
+		})
+		if err != nil {
+			return
 		}
-	}
 
-	if txData.TxType() == ethtypes.DynamicFeeTxType && decUtils.BaseFee != nil {
-		// If the base fee is not empty, we compute the effective gas price
-		// according to current base fee price. The gas limit is specified
-		// by the user, while the price is given by the minimum between the
-		// max price paid for the entire tx, and the sum between the price
-		// for the tip and the base fee.
-		feeAmt = txData.EffectiveFee(decUtils.BaseFee)
-		fee = sdkmath.LegacyNewDecFromBigInt(feeAmt)
-	}
+		// NOTE: the protocol does not support multiple EVM messages currently so
+		// this loop will complete after the first message.
+		msgs := tx.GetMsgs()
+		if len(msgs) != 1 {
+			err = errorsmod.Wrapf(errortypes.ErrInvalidRequest, "expected 1 message, got %d", len(msgs))
+			return
+		}
+		msgIndex := 0
 
-	// 3. min gas price (global min fee)
-	if err := CheckGlobalFee(fee, decUtils.GlobalMinGasPrice, gasLimit); err != nil {
-		return ctx, err
-	}
+		var ethMsg *evmtypes.MsgEthereumTx
+		var txData evmtypes.TxData
+		unpackLabels := pprof.Labels("Ante Handler", "UnpackEthMsg")
+		pprof.Do(ctx.Context(), unpackLabels, func(ctx2 context.Context) {
+			ethMsg, txData, err = evmtypes.UnpackEthMsg(msgs[msgIndex])
+		})
+		if err != nil {
+			return
+		}
 
-	// 4. validate msg contents
-	if err := ValidateMsg(
-		decUtils.EvmParams,
-		txData,
-		ethMsg.GetFrom(),
-	); err != nil {
-		return ctx, err
-	}
+		feeAmt := txData.Fee()
+		gas := txData.GetGas()
+		fee := sdkmath.LegacyNewDecFromBigInt(feeAmt)
+		gasLimit := sdkmath.LegacyNewDecFromBigInt(new(big.Int).SetUint64(gas))
 
-	// 5. signature verification
-	if err := SignatureVerification(
-		ethMsg,
-		decUtils.Signer,
-		decUtils.EvmParams.AllowUnprotectedTxs,
-	); err != nil {
-		return ctx, err
-	}
+		// TODO: computation for mempool and global fee can be made using only
+		// the price instead of the fee. This would save some computation.
+		//
+		// 2. mempool inclusion fee
+		if ctx.IsCheckTx() && !simulate {
+			// FIX: Mempool dec should be converted
+			mempoolLabels := pprof.Labels("Ante Handler", "CheckMempoolFee")
+			pprof.Do(ctx.Context(), mempoolLabels, func(ctx2 context.Context) {
+				err = CheckMempoolFee(fee, decUtils.MempoolMinGasPrice, gasLimit, decUtils.Rules.IsLondon)
+			})
+			if err != nil {
+				return
+			}
+		}
 
-	from := ethMsg.GetFrom()
-	fromAddr := common.BytesToAddress(from)
+		if txData.TxType() == ethtypes.DynamicFeeTxType && decUtils.BaseFee != nil {
+			// If the base fee is not empty, we compute the effective gas price
+			// according to current base fee price. The gas limit is specified
+			// by the user, while the price is given by the minimum between the
+			// max price paid for the entire tx, and the sum between the price
+			// for the tip and the base fee.
+			feeAmt = txData.EffectiveFee(decUtils.BaseFee)
+			fee = sdkmath.LegacyNewDecFromBigInt(feeAmt)
+		}
 
-	// 6. account balance verification
-	// We get the account with the balance from the EVM keeper because it is
-	// using a wrapper of the bank keeper as a dependency to scale all
-	// balances to 18 decimals.
-	account := md.evmKeeper.GetAccount(ctx, fromAddr)
-	if err := VerifyAccountBalance(
-		ctx,
-		md.accountKeeper,
-		account,
-		fromAddr,
-		txData,
-	); err != nil {
-		return ctx, err
-	}
+		// 3. min gas price (global min fee)
+		globalFeeLabels := pprof.Labels("Ante Handler", "CheckGlobalFee")
+		pprof.Do(ctx.Context(), globalFeeLabels, func(ctx2 context.Context) {
+			err = CheckGlobalFee(fee, decUtils.GlobalMinGasPrice, gasLimit)
+		})
+		if err != nil {
+			return
+		}
 
-	// 7. can transfer
-	coreMsg, err := ethMsg.AsMessage(decUtils.BaseFee)
-	if err != nil {
-		return ctx, errorsmod.Wrapf(
-			err,
-			"failed to create an ethereum core.Message from signer %T", decUtils.Signer,
-		)
-	}
+		// 4. validate msg contents
+		validateMsgLabels := pprof.Labels("Ante Handler", "ValidateMsg")
+		pprof.Do(ctx.Context(), validateMsgLabels, func(ctx2 context.Context) {
+			err = ValidateMsg(
+				decUtils.EvmParams,
+				txData,
+				ethMsg.GetFrom(),
+			)
+		})
+		if err != nil {
+			return
+		}
 
-	if err := CanTransfer(
-		ctx,
-		md.evmKeeper,
-		*coreMsg,
-		decUtils.BaseFee,
-		decUtils.EvmParams,
-		decUtils.Rules.IsLondon,
-	); err != nil {
-		return ctx, err
-	}
+		// 5. signature verification
+		signatureLabels := pprof.Labels("Ante Handler", "SignatureVerification")
+		pprof.Do(ctx.Context(), signatureLabels, func(ctx2 context.Context) {
+			err = SignatureVerification(
+				ethMsg,
+				decUtils.Signer,
+				decUtils.EvmParams.AllowUnprotectedTxs,
+			)
+		})
+		if err != nil {
+			return
+		}
 
-	// 8. gas consumption
-	msgFees, err := evmkeeper.VerifyFee(
-		txData,
-		evmDenom,
-		decUtils.BaseFee,
-		decUtils.Rules.IsHomestead,
-		decUtils.Rules.IsIstanbul,
-		decUtils.Rules.IsShanghai,
-		ctx.IsCheckTx(),
-	)
-	if err != nil {
-		return ctx, err
-	}
+		from := ethMsg.GetFrom()
+		fromAddr := common.BytesToAddress(from)
 
-	err = ConsumeFeesAndEmitEvent(
-		ctx,
-		md.evmKeeper,
-		msgFees,
-		from,
-	)
-	if err != nil {
-		return ctx, err
-	}
+		// 6. account balance verification
+		// We get the account with the balance from the EVM keeper because it is
+		// using a wrapper of the bank keeper as a dependency to scale all
+		// balances to 18 decimals.
+		account := md.evmKeeper.GetAccount(ctx, fromAddr)
+		balanceLabels := pprof.Labels("Ante Handler", "VerifyAccountBalance")
+		pprof.Do(ctx.Context(), balanceLabels, func(ctx2 context.Context) {
+			err = VerifyAccountBalance(
+				ctx.WithContext(ctx2),
+				md.accountKeeper,
+				account,
+				fromAddr,
+				txData,
+			)
+		})
+		if err != nil {
+			return
+		}
 
-	gasWanted := UpdateCumulativeGasWanted(
-		ctx,
-		gas,
-		md.maxGasWanted,
-		decUtils.GasWanted,
-	)
-	decUtils.GasWanted = gasWanted
+		// 7. can transfer
+		var coreMsg *core.Message
+		asMsgLabels := pprof.Labels("Ante Handler", "AsMessage")
+		pprof.Do(ctx.Context(), asMsgLabels, func(ctx2 context.Context) {
+			coreMsg, err = ethMsg.AsMessage(decUtils.BaseFee)
+		})
+		if err != nil {
+			err = errorsmod.Wrapf(
+				err,
+				"failed to create an ethereum core.Message from signer %T", decUtils.Signer,
+			)
+			return
+		}
 
-	minPriority := GetMsgPriority(
-		txData,
-		decUtils.MinPriority,
-		decUtils.BaseFee,
-	)
-	decUtils.MinPriority = minPriority
+		transferLabels := pprof.Labels("Ante Handler", "CanTransfer")
+		pprof.Do(ctx.Context(), transferLabels, func(ctx2 context.Context) {
+			err = CanTransfer(
+				ctx.WithContext(ctx2),
+				md.evmKeeper,
+				*coreMsg,
+				decUtils.BaseFee,
+				decUtils.EvmParams,
+				decUtils.Rules.IsLondon,
+			)
+		})
+		if err != nil {
+			return
+		}
 
-	// Update the fee to be paid for the tx adding the fee specified for the
-	// current message.
-	decUtils.TxFee.Add(decUtils.TxFee, txData.Fee())
+		// 8. gas consumption
+		var msgFees sdk.Coins
+		verifyFeeLabels := pprof.Labels("Ante Handler", "VerifyFee")
+		pprof.Do(ctx.Context(), verifyFeeLabels, func(ctx2 context.Context) {
+			msgFees, err = evmkeeper.VerifyFee(
+				txData,
+				evmDenom,
+				decUtils.BaseFee,
+				decUtils.Rules.IsHomestead,
+				decUtils.Rules.IsIstanbul,
+				decUtils.Rules.IsShanghai,
+				ctx.IsCheckTx(),
+			)
+		})
+		if err != nil {
+			return
+		}
 
-	// Update the transaction gas limit adding the gas specified in the
-	// current message.
-	decUtils.TxGasLimit += gas
+		consumeFeesLabels := pprof.Labels("Ante Handler", "ConsumeFeesAndEmitEvent")
+		pprof.Do(ctx.Context(), consumeFeesLabels, func(ctx2 context.Context) {
+			err = ConsumeFeesAndEmitEvent(
+				ctx.WithContext(ctx2),
+				md.evmKeeper,
+				msgFees,
+				from,
+			)
+		})
+		if err != nil {
+			return
+		}
 
-	// 9. increment sequence
-	acc := md.accountKeeper.GetAccount(ctx, from)
-	if acc == nil {
-		// safety check: shouldn't happen
-		return ctx, errorsmod.Wrapf(
-			errortypes.ErrUnknownAddress,
-			"account %s does not exist",
-			from,
-		)
-	}
+		var gasWanted uint64
+		gasWantedLabels := pprof.Labels("Ante Handler", "UpdateCumulativeGasWanted")
+		pprof.Do(ctx.Context(), gasWantedLabels, func(ctx2 context.Context) {
+			gasWanted = UpdateCumulativeGasWanted(
+				ctx.WithContext(ctx2),
+				gas,
+				md.maxGasWanted,
+				decUtils.GasWanted,
+			)
+		})
+		decUtils.GasWanted = gasWanted
 
-	if err := IncrementNonce(ctx, md.accountKeeper, acc, txData.GetNonce()); err != nil {
-		return ctx, err
-	}
+		var minPriority int64
+		priorityLabels := pprof.Labels("Ante Handler", "GetMsgPriority")
+		pprof.Do(ctx.Context(), priorityLabels, func(ctx2 context.Context) {
+			minPriority = GetMsgPriority(
+				txData,
+				decUtils.MinPriority,
+				decUtils.BaseFee,
+			)
+		})
+		decUtils.MinPriority = minPriority
 
-	// 10. gas wanted
-	if err := CheckGasWanted(ctx, md.feeMarketKeeper, tx, decUtils.Rules.IsLondon); err != nil {
-		return ctx, err
-	}
+		// Update the fee to be paid for the tx adding the fee specified for the
+		// current message.
+		decUtils.TxFee.Add(decUtils.TxFee, txData.Fee())
 
-	// 11. emit events
-	txIdx := uint64(msgIndex) //nolint:gosec // G115
-	EmitTxHashEvent(ctx, ethMsg, decUtils.BlockTxIndex, txIdx)
+		// Update the transaction gas limit adding the gas specified in the
+		// current message.
+		decUtils.TxGasLimit += gas
 
-	if err := CheckTxFee(txFeeInfo, decUtils.TxFee, decUtils.TxGasLimit); err != nil {
-		return ctx, err
-	}
+		// 9. increment sequence
+		nonceLabels := pprof.Labels("Ante Handler", "IncrementNonce")
+		pprof.Do(ctx.Context(), nonceLabels, func(ctx2 context.Context) {
+			acc := md.accountKeeper.GetAccount(ctx.WithContext(ctx2), from)
+			if acc == nil {
+				// safety check: shouldn't happen
+				err = errorsmod.Wrapf(
+					errortypes.ErrUnknownAddress,
+					"account %s does not exist",
+					from,
+				)
+				return
+			}
+			err = IncrementNonce(ctx.WithContext(ctx2), md.accountKeeper, acc, txData.GetNonce())
+		})
+		if err != nil {
+			return
+		}
 
-	ctx, err = CheckBlockGasLimit(ctx, decUtils.GasWanted, decUtils.MinPriority)
-	if err != nil {
-		return ctx, err
-	}
+		// 10. gas wanted
+		gasCheckLabels := pprof.Labels("Ante Handler", "CheckGasWanted")
+		pprof.Do(ctx.Context(), gasCheckLabels, func(ctx2 context.Context) {
+			err = CheckGasWanted(ctx.WithContext(ctx2), md.feeMarketKeeper, tx, decUtils.Rules.IsLondon)
+		})
+		if err != nil {
+			return
+		}
+
+		// 11. emit events
+		emitLabels := pprof.Labels("Ante Handler", "EmitTxHashEvent")
+		pprof.Do(ctx.Context(), emitLabels, func(ctx2 context.Context) {
+			txIdx := uint64(msgIndex) //nolint:gosec // G115
+			EmitTxHashEvent(ctx.WithContext(ctx2), ethMsg, decUtils.BlockTxIndex, txIdx)
+		})
+
+		// 12. check tx fee
+		txFeeLabels := pprof.Labels("Ante Handler", "CheckTxFee")
+		pprof.Do(ctx.Context(), txFeeLabels, func(ctx2 context.Context) {
+			err = CheckTxFee(txFeeInfo, decUtils.TxFee, decUtils.TxGasLimit)
+		})
+		if err != nil {
+			return
+		}
+
+		// 13. check block gas limit
+		blockGasLabels := pprof.Labels("Ante Handler", "CheckBlockGasLimit")
+		var finalCtx sdk.Context
+		pprof.Do(ctx.Context(), blockGasLabels, func(ctx2 context.Context) {
+			finalCtx, err = CheckBlockGasLimit(ctx.WithContext(ctx2), decUtils.GasWanted, decUtils.MinPriority)
+		})
+		if err != nil {
+			return
+		}
+		ctx = finalCtx
 
 	return next(ctx, tx, simulate)
 }
