@@ -394,13 +394,14 @@ func (k *Keeper) ApplyMessageWithConfig(
 
 	if contractCreation {
 		ret, _, leftoverGas, vmErr = evm.Create(sender.Address(), msg.Data, leftoverGas, convertedValue)
+		if vmErr == nil {
+			stateDB.SetNonce(sender.Address(), msg.Nonce+1, tracing.NonceChangeContractCreator)
+		}
 	} else {
+		// For regular calls, always increment nonce before execution
+		stateDB.SetNonce(sender.Address(), msg.Nonce+1, tracing.NonceChangeContractCreator)
 		ret, leftoverGas, vmErr = evm.Call(sender.Address(), *msg.To, msg.Data, leftoverGas, convertedValue)
 	}
-
-	// Increment nonce after EVM execution regardless of result
-	// (ante handler no longer increments nonce, so we handle it here)
-	stateDB.SetNonce(sender.Address(), msg.Nonce+1, tracing.NonceChangeContractCreator)
 
 	refundQuotient := params.RefundQuotient
 
