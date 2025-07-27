@@ -160,11 +160,30 @@ func (k *Keeper) ApplyTransaction(ctx sdk.Context, msgEth *types.MsgEthereumTx) 
 	ethTx := msgEth.AsTransaction()
 	txConfig := k.TxConfig(ctx, ethTx.Hash())
 
-	// get the signer according to the chain rules from the config and block height
-	signer := ethtypes.MakeSigner(types.GetEthChainConfig(), big.NewInt(ctx.BlockHeight()), uint64(ctx.BlockTime().Unix())) //#nosec G115 -- int overflow is not a concern here
-	msg, err := core.TransactionToMessage(ethTx, signer, cfg.BaseFee)
-	if err != nil {
-		return nil, errorsmod.Wrap(err, "failed to return ethereum transaction as core message")
+	// Try to get decoded data from context (set by ante handler)
+	var msg *core.Message
+
+	if evmMsgs := ctx.Value(types.ContextKeyEVMDMessages); evmMsgs != nil {
+		if evmMsg, ok := evmMsgs.(*types.EVMMessages); ok {
+			// Get message at current index
+			if evmMsg.CurrentIndex < len(evmMsg.Messages) {
+				msg = evmMsg.Messages[evmMsg.CurrentIndex]
+				// Increment index for next message
+				evmMsg.CurrentIndex++
+				// Update context with incremented index
+				ctx = ctx.WithValue(types.ContextKeyEVMDMessages, evmMsg)
+			}
+		}
+	}
+
+	// If not in context, decode it (for direct calls like eth_call)
+	if msg == nil {
+		// get the signer according to the chain rules from the config and block height
+		signer := ethtypes.MakeSigner(types.GetEthChainConfig(), big.NewInt(ctx.BlockHeight()), uint64(ctx.BlockTime().Unix())) //#nosec G115 -- int overflow is not a concern here
+		msg, err = core.TransactionToMessage(ethTx, signer, cfg.BaseFee)
+		if err != nil {
+			return nil, errorsmod.Wrap(err, "failed to return ethereum transaction as core message")
+		}
 	}
 
 	// create a cache context to revert state. The cache context is only committed when both tx and hooks executed successfully.
@@ -219,14 +238,9 @@ func (k *Keeper) ApplyTransaction(ctx sdk.Context, msgEth *types.MsgEthereumTx) 
 			TransactionIndex:  txConfig.TxIndex,
 		}
 
-		signerAddr, err := signer.Sender(ethTx)
-		if err != nil {
-			return nil, errorsmod.Wrap(err, "failed to extract sender address from ethereum transaction")
-		}
-
 		// Note: PostTxProcessing hooks currently do not charge for gas
 		// and function similar to EndBlockers in abci, but for EVM transactions
-		if err = k.PostTxProcessing(tmpCtx, signerAddr, *msg, receipt); err != nil {
+		if err = k.PostTxProcessing(tmpCtx, msg.From, *msg, receipt); err != nil {
 			// If hooks returns an error, revert the whole tx.
 			res.VmError = errorsmod.Wrap(err, "failed to execute post transaction processing").Error()
 			k.Logger(ctx).Error("tx post processing failed", "error", err)

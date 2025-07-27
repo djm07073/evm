@@ -4,6 +4,7 @@ import (
 	"math/big"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core"
 	ethtypes "github.com/ethereum/go-ethereum/core/types"
 
 	anteinterfaces "github.com/cosmos/evm/ante/interfaces"
@@ -188,6 +189,20 @@ func (md MonoDecorator) AnteHandle(ctx sdk.Context, tx sdk.Tx, simulate bool, ne
 	if err != nil {
 		return ctx, err
 	}
+
+	// Store decoded message in context
+	var evmMsgs *evmtypes.EVMMessages
+	if existingEvmMsgs := ctx.Value(evmtypes.ContextKeyEVMDMessages); existingEvmMsgs != nil {
+		evmMsgs, _ = existingEvmMsgs.(*evmtypes.EVMMessages)
+	}
+	if evmMsgs == nil {
+		evmMsgs = &evmtypes.EVMMessages{
+			Messages:     make([]*core.Message, 0),
+			CurrentIndex: 0,
+		}
+	}
+	evmMsgs.Messages = append(evmMsgs.Messages, coreMsg)
+	ctx = ctx.WithValue(evmtypes.ContextKeyEVMDMessages, evmMsgs)
 
 	gasWanted := UpdateCumulativeGasWanted(
 		ctx,
