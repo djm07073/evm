@@ -3,12 +3,10 @@ package evm
 import (
 	"math/big"
 
-	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core"
+	"github.com/holiman/uint256"
 
 	anteinterfaces "github.com/cosmos/evm/ante/interfaces"
-	"github.com/cosmos/evm/utils"
-	"github.com/cosmos/evm/x/vm/statedb"
 	evmtypes "github.com/cosmos/evm/x/vm/types"
 
 	errorsmod "cosmossdk.io/errors"
@@ -17,8 +15,8 @@ import (
 	errortypes "github.com/cosmos/cosmos-sdk/types/errors"
 )
 
-// CanTransfer checks if the sender is allowed to transfer funds according to the EVM block
-func CanTransfer(
+// CheckInsufficientBalance checks if the sender has enough balance for fee + value
+func CheckInsufficientBalance(
 	ctx sdk.Context,
 	evmKeeper anteinterfaces.EVMKeeper,
 	msg core.Message,
@@ -34,28 +32,36 @@ func CanTransfer(
 		)
 	}
 
-	// NOTE: pass in an empty coinbase address and nil tracer as we don't need them for the check below
-	cfg := &statedb.EVMConfig{
-		Params:   params,
-		CoinBase: common.Address{},
-		BaseFee:  baseFee,
+	maxFee := new(big.Int).Mul(new(big.Int).SetUint64(msg.GasLimit), msg.GasPrice)
+	totalRequired := new(big.Int).Add(maxFee, msg.Value)
+
+	account := evmKeeper.GetAccount(ctx, msg.From)
+	if account == nil {
+		return errorsmod.Wrapf(
+			errortypes.ErrUnknownAddress,
+			"account %s does not exist",
+			msg.From,
+		)
 	}
 
-	stateDB := statedb.New(ctx, evmKeeper, statedb.NewEmptyTxConfig(common.BytesToHash(ctx.HeaderHash())))
-	evm := evmKeeper.NewEVM(ctx, msg, cfg, evmtypes.NewNoOpTracer(), stateDB)
-
-	// check that caller has enough balance to cover asset transfer for **topmost** call
-	// NOTE: here the gas consumed is from the context with the infinite gas meter
-	convertedValue, err := utils.Uint256FromBigInt(msg.Value)
-	if err != nil {
-		return err
+	totalRequiredUint256, overflow := uint256.FromBig(totalRequired)
+	if overflow {
+		return errorsmod.Wrapf(
+			errortypes.ErrInvalidRequest,
+			"fee + value overflow: %s",
+			totalRequired,
+		)
 	}
-	if msg.Value.Sign() > 0 && !evm.Context.CanTransfer(stateDB, msg.From, convertedValue) {
+
+	if account.Balance.Cmp(totalRequiredUint256) < 0 {
 		return errorsmod.Wrapf(
 			errortypes.ErrInsufficientFunds,
-			"failed to transfer %s from address %s using the EVM block context transfer function",
+			"insufficient balance for fee (%s) + value (%s) = %s from address %s (balance: %s)",
+			maxFee,
 			msg.Value,
+			totalRequired,
 			msg.From,
+			account.Balance,
 		)
 	}
 

@@ -164,7 +164,7 @@ func (md MonoDecorator) AnteHandle(ctx sdk.Context, tx sdk.Tx, simulate bool, ne
 		)
 	}
 
-	if err := CanTransfer(
+	if err := CheckInsufficientBalance(
 		ctx,
 		md.evmKeeper,
 		*coreMsg,

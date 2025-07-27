@@ -88,7 +88,7 @@ func (s *EvmUnitAnteTestSuite) TestCanTransfer() {
 			s.Require().NoError(err)
 
 			// Function under test
-			err = evm.CanTransfer(
+			err = evm.CheckInsufficientBalance(
 				unitNetwork.GetContext(),
 				unitNetwork.App.GetEVMKeeper(),
 				*coreMsg,
