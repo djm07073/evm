@@ -5,12 +5,10 @@ import (
 	"math/big"
 	"runtime/pprof"
 
-	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core"
 	ethtypes "github.com/ethereum/go-ethereum/core/types"
 
 	anteinterfaces "github.com/cosmos/evm/ante/interfaces"
-	evmkeeper "github.com/cosmos/evm/x/vm/keeper"
 	evmtypes "github.com/cosmos/evm/x/vm/types"
 
 	errorsmod "cosmossdk.io/errors"
@@ -71,8 +69,6 @@ func (md MonoDecorator) AnteHandle(ctx sdk.Context, tx sdk.Tx, simulate bool, ne
 				return
 			}
 		}
-
-		evmDenom := evmtypes.GetEVMCoinDenom()
 
 		// 1. setup ctx
 		setupCtxLabels := pprof.Labels("Ante Handler", "SetupContextAndResetTransientGas")
@@ -178,28 +174,8 @@ func (md MonoDecorator) AnteHandle(ctx sdk.Context, tx sdk.Tx, simulate bool, ne
 		}
 
 		from := ethMsg.GetFrom()
-		fromAddr := common.BytesToAddress(from)
 
-		// 6. account balance verification
-		// We get the account with the balance from the EVM keeper because it is
-		// using a wrapper of the bank keeper as a dependency to scale all
-		// balances to 18 decimals.
-		account := md.evmKeeper.GetAccount(ctx, fromAddr)
-		balanceLabels := pprof.Labels("Ante Handler", "VerifyAccountBalance")
-		pprof.Do(ppctx, balanceLabels, func(ctx2 context.Context) {
-			err = VerifyAccountBalance(
-				ctx,
-				md.accountKeeper,
-				account,
-				fromAddr,
-				txData,
-			)
-		})
-		if err != nil {
-			return
-		}
-
-		// 7. can transfer
+		// 6. Convert to core.Message for validation
 		var coreMsg *core.Message
 		asMsgLabels := pprof.Labels("Ante Handler", "AsMessage")
 		pprof.Do(ppctx, asMsgLabels, func(ctx2 context.Context) {
@@ -213,32 +189,17 @@ func (md MonoDecorator) AnteHandle(ctx sdk.Context, tx sdk.Tx, simulate bool, ne
 			return
 		}
 
-		transferLabels := pprof.Labels("Ante Handler", "CheckInsufficientBalance")
-		pprof.Do(ppctx, transferLabels, func(ctx2 context.Context) {
-			err = CheckInsufficientBalance(
+		// 7. Transaction cost validation
+		// This combines account balance verification, fee validation, and transfer checks
+		validateCostsLabels := pprof.Labels("Ante Handler", "ValidateTransactionCosts")
+		pprof.Do(ppctx, validateCostsLabels, func(ctx2 context.Context) {
+			err = ValidateTransactionCosts(
 				ctx,
 				md.evmKeeper,
-				*coreMsg,
-				decUtils.BaseFee,
-				decUtils.EvmParams,
-				decUtils.Rules.IsLondon,
-			)
-		})
-		if err != nil {
-			return
-		}
-
-		// 8. gas consumption
-		verifyFeeLabels := pprof.Labels("Ante Handler", "VerifyFee")
-		pprof.Do(ppctx, verifyFeeLabels, func(ctx2 context.Context) {
-			_, err = evmkeeper.VerifyFee(
+				coreMsg,
 				txData,
-				evmDenom,
 				decUtils.BaseFee,
-				decUtils.Rules.IsHomestead,
-				decUtils.Rules.IsIstanbul,
-				decUtils.Rules.IsShanghai,
-				ctx.IsCheckTx(),
+				decUtils.Rules,
 			)
 		})
 		if err != nil {
@@ -258,7 +219,7 @@ func (md MonoDecorator) AnteHandle(ctx sdk.Context, tx sdk.Tx, simulate bool, ne
 		}
 		evmMsgs.Messages = append(evmMsgs.Messages, coreMsg)
 		ctx = ctx.WithValue(evmtypes.ContextKeyEVMDMessages, evmMsgs)
-
+		
 		var gasWanted uint64
 		gasWantedLabels := pprof.Labels("Ante Handler", "UpdateCumulativeGasWanted")
 		pprof.Do(ppctx, gasWantedLabels, func(ctx2 context.Context) {
