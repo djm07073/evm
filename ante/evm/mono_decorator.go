@@ -173,8 +173,6 @@ func (md MonoDecorator) AnteHandle(ctx sdk.Context, tx sdk.Tx, simulate bool, ne
 			return
 		}
 
-		from := ethMsg.GetFrom()
-
 		// 6. Convert to core.Message for validation
 		var coreMsg *core.Message
 		asMsgLabels := pprof.Labels("Ante Handler", "AsMessage")
@@ -251,24 +249,7 @@ func (md MonoDecorator) AnteHandle(ctx sdk.Context, tx sdk.Tx, simulate bool, ne
 		// current message.
 		decUtils.TxGasLimit += gas
 
-		// 9. increment sequence
-		nonceLabels := pprof.Labels("Ante Handler", "IncrementNonce")
-		pprof.Do(ppctx, nonceLabels, func(ctx2 context.Context) {
-			acc := md.accountKeeper.GetAccount(ctx, from)
-			if acc == nil {
-				// safety check: shouldn't happen
-				err = errorsmod.Wrapf(
-					errortypes.ErrUnknownAddress,
-					"account %s does not exist",
-					from,
-				)
-				return
-			}
-			err = IncrementNonce(ctx, md.accountKeeper, acc, txData.GetNonce())
-		})
-		if err != nil {
-			return
-		}
+		// 9. increment sequence - removed as nonce is managed in state_transition.go
 
 		// 10. gas wanted
 		gasCheckLabels := pprof.Labels("Ante Handler", "CheckGasWanted")

@@ -439,18 +439,19 @@ func (k *Keeper) ApplyMessageWithConfig(
 
 	if contractCreation {
 		pprof.Do(ctx.Context(), pprof.Labels("ApplyMessageWithConfig", "ExecuteEVM"), func(ppctx context.Context) {
-			// take over the nonce management from evm:
-			// - reset sender's nonce to msg.Nonce() before calling evm.
-			// - increase sender's nonce by one no matter the result.
-			stateDB.SetNonce(sender.Address(), msg.Nonce, tracing.NonceChangeEoACall)
 			ret, _, leftoverGas, vmErr = evm.Create(sender.Address(), msg.Data, leftoverGas, convertedValue)
-			stateDB.SetNonce(sender.Address(), msg.Nonce+1, tracing.NonceChangeContractCreator)
 		})
 	} else {
 		pprof.Do(ctx.Context(), pprof.Labels("ApplyMessageWithConfig", "ExecuteEVM"), func(ppctx context.Context) {
 			ret, leftoverGas, vmErr = evm.Call(sender.Address(), *msg.To, msg.Data, leftoverGas, convertedValue)
 		})
 	}
+
+	// Increment nonce after EVM execution regardless of result
+	// (ante handler no longer increments nonce, so we handle it here)
+	pprof.Do(ctx.Context(), pprof.Labels("ApplyMessageWithConfig", "IncrementNonce"), func(ppctx context.Context) {
+		stateDB.SetNonce(sender.Address(), msg.Nonce+1, tracing.NonceChangeContractCreator)
+	})
 
 	refundQuotient := params.RefundQuotient
 
