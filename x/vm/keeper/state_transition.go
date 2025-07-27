@@ -243,13 +243,8 @@ func (k *Keeper) ApplyTransaction(ctx sdk.Context, msgEth *types.MsgEthereumTx) 
 
 	evmDenom := types.GetEVMCoinDenom()
 
-	// refund gas in order to match the Ethereum gas consumption instead of the default SDK one.
-	remainingGas := uint64(0)
-	if msg.GasLimit > res.GasUsed {
-		remainingGas = msg.GasLimit - res.GasUsed
-	}
-	if err = k.RefundGas(ctx, *msg, remainingGas, evmDenom); err != nil {
-		return nil, errorsmod.Wrapf(err, "failed to refund gas leftover gas to sender %s", msg.From)
+	if err = k.SettleTransactionFee(ctx, *msg, res.GasUsed, evmDenom); err != nil {
+		return nil, errorsmod.Wrapf(err, "failed to settle fee for sender %s", msg.From)
 	}
 
 	if len(logs) > 0 {
@@ -452,4 +447,33 @@ func (k *Keeper) ApplyMessageWithConfig(
 		Logs:    types.NewLogsFromEth(stateDB.Logs()),
 		Hash:    txConfig.TxHash.Hex(),
 	}, nil
+}
+
+func (k *Keeper) SettleTransactionFee(
+	ctx sdk.Context,
+	msg core.Message,
+	gasUsed uint64,
+	denom string,
+) error {
+	actualFeeAmount := new(big.Int).Mul(new(big.Int).SetUint64(gasUsed), msg.GasPrice)
+	actualFee := sdk.Coins{sdk.NewCoin(denom, math.NewIntFromBigInt(actualFeeAmount))}
+	
+	if actualFee.IsZero() {
+		return nil
+	}
+	
+	err := k.DeductTxCostsFromUserBalance(ctx, actualFee, msg.From)
+	if err != nil {
+		return errorsmod.Wrapf(err, "failed to deduct actual fee %s from sender %s", 
+			actualFee, msg.From)
+	}
+	
+	ctx.EventManager().EmitEvent(
+		sdk.NewEvent(
+			sdk.EventTypeTx,
+			sdk.NewAttribute(sdk.AttributeKeyFee, actualFee.String()),
+		),
+	)
+	
+	return nil
 }
