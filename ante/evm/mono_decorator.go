@@ -48,7 +48,6 @@ func NewEVMMonoDecorator(
 
 // AnteHandle handles the entire decorator chain using a mono decorator.
 func (md MonoDecorator) AnteHandle(ctx sdk.Context, tx sdk.Tx, simulate bool, next sdk.AnteHandler) (newCtx sdk.Context, err error) {
-
 	// 0. Basic validation of the transaction
 	var txFeeInfo *txtypes.Fee
 	if !ctx.IsReCheckTx() {
@@ -57,34 +56,33 @@ func (md MonoDecorator) AnteHandle(ctx sdk.Context, tx sdk.Tx, simulate bool, ne
 		// should be converted later when used.
 		txFeeInfo, err = ValidateTx(tx)
 		if err != nil {
-			return
+			return ctx, err
 		}
 	}
 
 	// 1. setup ctx
 	ctx, err = SetupContextAndResetTransientGas(ctx, tx, md.evmKeeper)
 	if err != nil {
-		return
+		return ctx, err
 	}
 
 	// 2. get utils
 	decUtils, err := NewMonoDecoratorUtils(ctx, md.evmKeeper)
 	if err != nil {
-		return
+		return ctx, err
 	}
 
 	// NOTE: the protocol does not support multiple EVM messages currently so
 	// this loop will complete after the first message.
 	msgs := tx.GetMsgs()
 	if len(msgs) != 1 {
-		err = errorsmod.Wrapf(errortypes.ErrInvalidRequest, "expected 1 message, got %d", len(msgs))
-		return
+		return ctx, errorsmod.Wrapf(errortypes.ErrInvalidRequest, "expected 1 message, got %d", len(msgs))
 	}
 	msgIndex := 0
 
 	ethMsg, txData, err := evmtypes.UnpackEthMsg(msgs[msgIndex])
 	if err != nil {
-		return
+		return ctx, err
 	}
 
 	feeAmt := txData.Fee()
@@ -100,7 +98,7 @@ func (md MonoDecorator) AnteHandle(ctx sdk.Context, tx sdk.Tx, simulate bool, ne
 		// FIX: Mempool dec should be converted
 		err = CheckMempoolFee(fee, decUtils.MempoolMinGasPrice, gasLimit, decUtils.Rules.IsLondon)
 		if err != nil {
-			return
+			return ctx, err
 		}
 	}
 
@@ -117,7 +115,7 @@ func (md MonoDecorator) AnteHandle(ctx sdk.Context, tx sdk.Tx, simulate bool, ne
 	// 3. min gas price (global min fee)
 	err = CheckGlobalFee(fee, decUtils.GlobalMinGasPrice, gasLimit)
 	if err != nil {
-		return
+		return ctx, err
 	}
 
 	// 4. validate msg contents
@@ -127,41 +125,38 @@ func (md MonoDecorator) AnteHandle(ctx sdk.Context, tx sdk.Tx, simulate bool, ne
 		ethMsg.GetFrom(),
 	)
 	if err != nil {
-		return
+		return ctx, err
 	}
 
 	// 5. signature verification
-	err = SignatureVerification(
+	if err := SignatureVerification(
 		ethMsg,
 		decUtils.Signer,
 		decUtils.EvmParams.AllowUnprotectedTxs,
-	)
-	if err != nil {
-		return
+	); err != nil {
+		return ctx, err
 	}
 
 	// 6. Convert to core.Message for validation
 	coreMsg, err := ethMsg.AsMessage(decUtils.BaseFee)
 	if err != nil {
-		err = errorsmod.Wrapf(
+		return ctx, errorsmod.Wrapf(
 			err,
 			"failed to create an ethereum core.Message from signer %T", decUtils.Signer,
 		)
-		return
 	}
 
 	// 7. Transaction cost validation
 	// This combines account balance verification, fee validation, and transfer checks
-	err = ValidateTransactionCosts(
+	if err = ValidateTransactionCosts(
 		ctx,
 		md.evmKeeper,
 		coreMsg,
 		txData,
 		decUtils.BaseFee,
 		decUtils.Rules,
-	)
-	if err != nil {
-		return
+	); err != nil {
+		return ctx, err
 	}
 
 	// Store decoded message in context
@@ -206,7 +201,7 @@ func (md MonoDecorator) AnteHandle(ctx sdk.Context, tx sdk.Tx, simulate bool, ne
 	// 10. gas wanted
 	err = CheckGasWanted(ctx, md.feeMarketKeeper, tx, decUtils.Rules.IsLondon)
 	if err != nil {
-		return
+		return ctx, err
 	}
 
 	// 11. emit events
@@ -214,15 +209,14 @@ func (md MonoDecorator) AnteHandle(ctx sdk.Context, tx sdk.Tx, simulate bool, ne
 	EmitTxHashEvent(ctx, ethMsg, decUtils.BlockTxIndex, txIdx)
 
 	// 12. check tx fee
-	err = CheckTxFee(txFeeInfo, decUtils.TxFee, decUtils.TxGasLimit)
-	if err != nil {
-		return
+	if err := CheckTxFee(txFeeInfo, decUtils.TxFee, decUtils.TxGasLimit); err != nil {
+		return ctx, err
 	}
 
 	// 13. check block gas limit
 	ctx, err = CheckBlockGasLimit(ctx, decUtils.GasWanted, decUtils.MinPriority)
 	if err != nil {
-		return
+		return ctx, err
 	}
 
 	return next(ctx, tx, simulate)
