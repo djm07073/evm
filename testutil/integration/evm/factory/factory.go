@@ -154,6 +154,10 @@ func (tf *IntegrationTxFactory) populateEvmTxArgsWithDefault(
 			}
 			txArgs.GasFeeCap = baseFeeResp.BaseFee.BigInt()
 		}
+		// Ensure GasTipCap <= GasFeeCap
+		if txArgs.GasTipCap.Cmp(txArgs.GasFeeCap) > 0 {
+			txArgs.GasTipCap = new(big.Int).Set(txArgs.GasFeeCap)
+		}
 	}
 
 	// If the gas limit is not set, estimate it
