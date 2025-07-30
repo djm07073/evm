@@ -19,6 +19,9 @@ const (
 
 	// RouterKey uses module name for routing
 	RouterKey = ModuleName
+
+	// CoreMessageKey is the key to access the decoded EVM messages
+	CoreMessageKey = "evm_core_message"
 )
 
 // prefix bytes for the EVM persistent store

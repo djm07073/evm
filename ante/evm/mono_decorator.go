@@ -3,11 +3,9 @@ package evm
 import (
 	"math/big"
 
-	"github.com/ethereum/go-ethereum/common"
 	ethtypes "github.com/ethereum/go-ethereum/core/types"
 
 	anteinterfaces "github.com/cosmos/evm/ante/interfaces"
-	evmkeeper "github.com/cosmos/evm/x/vm/keeper"
 	evmtypes "github.com/cosmos/evm/x/vm/types"
 
 	errorsmod "cosmossdk.io/errors"
@@ -60,8 +58,6 @@ func (md MonoDecorator) AnteHandle(ctx sdk.Context, tx sdk.Tx, simulate bool, ne
 			return ctx, err
 		}
 	}
-
-	evmDenom := evmtypes.GetEVMCoinDenom()
 
 	// 1. setup ctx
 	ctx, err = SetupContextAndResetTransientGas(ctx, tx, md.evmKeeper)
@@ -138,24 +134,7 @@ func (md MonoDecorator) AnteHandle(ctx sdk.Context, tx sdk.Tx, simulate bool, ne
 	}
 
 	from := ethMsg.GetFrom()
-	fromAddr := common.BytesToAddress(from)
 
-	// 6. account balance verification
-	// We get the account with the balance from the EVM keeper because it is
-	// using a wrapper of the bank keeper as a dependency to scale all
-	// balances to 18 decimals.
-	account := md.evmKeeper.GetAccount(ctx, fromAddr)
-	if err := VerifyAccountBalance(
-		ctx,
-		md.accountKeeper,
-		account,
-		fromAddr,
-		txData,
-	); err != nil {
-		return ctx, err
-	}
-
-	// 7. can transfer
 	coreMsg, err := ethMsg.AsMessage(decUtils.BaseFee)
 	if err != nil {
 		return ctx, errorsmod.Wrapf(
@@ -163,42 +142,23 @@ func (md MonoDecorator) AnteHandle(ctx sdk.Context, tx sdk.Tx, simulate bool, ne
 			"failed to create an ethereum core.Message from signer %T", decUtils.Signer,
 		)
 	}
+	// 6. store the message in the context
+	ctx = ctx.WithValue(evmtypes.CoreMessageKey, coreMsg)
 
-	if err := CanTransfer(
+	// 7. validate transaction costs
+	err = ValidateTransactionCosts(
 		ctx,
 		md.evmKeeper,
-		*coreMsg,
-		decUtils.BaseFee,
-		decUtils.EvmParams,
-		decUtils.Rules.IsLondon,
-	); err != nil {
-		return ctx, err
-	}
-
-	// 8. gas consumption
-	msgFees, err := evmkeeper.VerifyFee(
+		coreMsg,
 		txData,
-		evmDenom,
 		decUtils.BaseFee,
-		decUtils.Rules.IsHomestead,
-		decUtils.Rules.IsIstanbul,
-		decUtils.Rules.IsShanghai,
-		ctx.IsCheckTx(),
+		decUtils.Rules,
 	)
 	if err != nil {
 		return ctx, err
 	}
 
-	err = ConsumeFeesAndEmitEvent(
-		ctx,
-		md.evmKeeper,
-		msgFees,
-		from,
-	)
-	if err != nil {
-		return ctx, err
-	}
-
+	// delete ConsumeFeesAndEmitEvent
 	gasWanted := UpdateCumulativeGasWanted(
 		ctx,
 		gas,
@@ -222,7 +182,7 @@ func (md MonoDecorator) AnteHandle(ctx sdk.Context, tx sdk.Tx, simulate bool, ne
 	// current message.
 	decUtils.TxGasLimit += gas
 
-	// 9. increment sequence
+	// 8. increment sequence
 	acc := md.accountKeeper.GetAccount(ctx, from)
 	if acc == nil {
 		// safety check: shouldn't happen
@@ -237,12 +197,12 @@ func (md MonoDecorator) AnteHandle(ctx sdk.Context, tx sdk.Tx, simulate bool, ne
 		return ctx, err
 	}
 
-	// 10. gas wanted
+	// 9. gas wanted
 	if err := CheckGasWanted(ctx, md.feeMarketKeeper, tx, decUtils.Rules.IsLondon); err != nil {
 		return ctx, err
 	}
 
-	// 11. emit events
+	// 10. emit events
 	txIdx := uint64(msgIndex) //nolint:gosec // G115
 	EmitTxHashEvent(ctx, ethMsg, decUtils.BlockTxIndex, txIdx)
 

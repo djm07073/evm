@@ -157,14 +157,24 @@ func (k *Keeper) ApplyTransaction(ctx sdk.Context, msgEth *types.MsgEthereumTx) 
 	if err != nil {
 		return nil, errorsmod.Wrap(err, "failed to load evm config")
 	}
+
 	ethTx := msgEth.AsTransaction()
 	txConfig := k.TxConfig(ctx, ethTx.Hash())
 
-	// get the signer according to the chain rules from the config and block height
-	signer := ethtypes.MakeSigner(types.GetEthChainConfig(), big.NewInt(ctx.BlockHeight()), uint64(ctx.BlockTime().Unix())) //#nosec G115 -- int overflow is not a concern here
-	msg, err := core.TransactionToMessage(ethTx, signer, cfg.BaseFee)
-	if err != nil {
-		return nil, errorsmod.Wrap(err, "failed to return ethereum transaction as core message")
+	// Try to get decoded data from context (set by ante handler)
+	var msg *core.Message
+	if ctxMsg := ctx.Value(types.CoreMessageKey); ctxMsg != nil {
+		msg = ctxMsg.(*core.Message)
+	}
+
+	// If not in context, decode it (unreachable)
+	if msg == nil {
+		// get the signer according to the chain rules from the config and block height
+		signer := ethtypes.MakeSigner(types.GetEthChainConfig(), big.NewInt(ctx.BlockHeight()), uint64(ctx.BlockTime().Unix())) //#nosec G115 -- int overflow is not a concern here
+		msg, err = core.TransactionToMessage(ethTx, signer, cfg.BaseFee)
+		if err != nil {
+			return nil, errorsmod.Wrap(err, "failed to return ethereum transaction as core message")
+		}
 	}
 
 	// create a cache context to revert state. The cache context is only committed when both tx and hooks executed successfully.
@@ -219,14 +229,9 @@ func (k *Keeper) ApplyTransaction(ctx sdk.Context, msgEth *types.MsgEthereumTx) 
 			TransactionIndex:  txConfig.TxIndex,
 		}
 
-		signerAddr, err := signer.Sender(ethTx)
-		if err != nil {
-			return nil, errorsmod.Wrap(err, "failed to extract sender address from ethereum transaction")
-		}
-
 		// Note: PostTxProcessing hooks currently do not charge for gas
 		// and function similar to EndBlockers in abci, but for EVM transactions
-		if err = k.PostTxProcessing(tmpCtx, signerAddr, *msg, receipt); err != nil {
+		if err = k.PostTxProcessing(tmpCtx, msg.From, *msg, receipt); err != nil {
 			// If hooks returns an error, revert the whole tx.
 			res.VmError = errorsmod.Wrap(err, "failed to execute post transaction processing").Error()
 			k.Logger(ctx).Error("tx post processing failed", "error", err)
@@ -243,13 +248,8 @@ func (k *Keeper) ApplyTransaction(ctx sdk.Context, msgEth *types.MsgEthereumTx) 
 
 	evmDenom := types.GetEVMCoinDenom()
 
-	// refund gas in order to match the Ethereum gas consumption instead of the default SDK one.
-	remainingGas := uint64(0)
-	if msg.GasLimit > res.GasUsed {
-		remainingGas = msg.GasLimit - res.GasUsed
-	}
-	if err = k.RefundGas(ctx, *msg, remainingGas, evmDenom); err != nil {
-		return nil, errorsmod.Wrapf(err, "failed to refund gas leftover gas to sender %s", msg.From)
+	if err = k.SettleTransactionFee(ctx, *msg, res.GasUsed, evmDenom); err != nil {
+		return nil, errorsmod.Wrapf(err, "failed to settle fee for sender %s", msg.From)
 	}
 
 	if len(logs) > 0 {
@@ -452,4 +452,33 @@ func (k *Keeper) ApplyMessageWithConfig(
 		Logs:    types.NewLogsFromEth(stateDB.Logs()),
 		Hash:    txConfig.TxHash.Hex(),
 	}, nil
+}
+
+func (k *Keeper) SettleTransactionFee(
+	ctx sdk.Context,
+	msg core.Message,
+	gasUsed uint64,
+	denom string,
+) error {
+	actualFeeAmount := new(big.Int).Mul(new(big.Int).SetUint64(gasUsed), msg.GasPrice)
+	actualFee := sdk.Coins{sdk.NewCoin(denom, math.NewIntFromBigInt(actualFeeAmount))}
+
+	if actualFee.IsZero() {
+		return nil
+	}
+
+	err := k.DeductTxCostsFromUserBalance(ctx, actualFee, msg.From)
+	if err != nil {
+		return errorsmod.Wrapf(err, "failed to deduct actual fee %s from sender %s",
+			actualFee, msg.From)
+	}
+
+	ctx.EventManager().EmitEvent(
+		sdk.NewEvent(
+			sdk.EventTypeTx,
+			sdk.NewAttribute(sdk.AttributeKeyFee, actualFee.String()),
+		),
+	)
+
+	return nil
 }
