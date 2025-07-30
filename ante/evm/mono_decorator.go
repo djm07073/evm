@@ -135,7 +135,6 @@ func (md MonoDecorator) AnteHandle(ctx sdk.Context, tx sdk.Tx, simulate bool, ne
 
 	from := ethMsg.GetFrom()
 
-	// 6,7,8. validate transaction costs
 	coreMsg, err := ethMsg.AsMessage(decUtils.BaseFee)
 	if err != nil {
 		return ctx, errorsmod.Wrapf(
@@ -143,7 +142,10 @@ func (md MonoDecorator) AnteHandle(ctx sdk.Context, tx sdk.Tx, simulate bool, ne
 			"failed to create an ethereum core.Message from signer %T", decUtils.Signer,
 		)
 	}
+	// 6. store the message in the context
+	ctx = ctx.WithValue(evmtypes.CoreMessageKey, coreMsg)
 
+	// 7. validate transaction costs
 	err = ValidateTransactionCosts(
 		ctx,
 		md.evmKeeper,
@@ -180,7 +182,7 @@ func (md MonoDecorator) AnteHandle(ctx sdk.Context, tx sdk.Tx, simulate bool, ne
 	// current message.
 	decUtils.TxGasLimit += gas
 
-	// 9. increment sequence
+	// 8. increment sequence
 	acc := md.accountKeeper.GetAccount(ctx, from)
 	if acc == nil {
 		// safety check: shouldn't happen
@@ -195,12 +197,12 @@ func (md MonoDecorator) AnteHandle(ctx sdk.Context, tx sdk.Tx, simulate bool, ne
 		return ctx, err
 	}
 
-	// 10. gas wanted
+	// 9. gas wanted
 	if err := CheckGasWanted(ctx, md.feeMarketKeeper, tx, decUtils.Rules.IsLondon); err != nil {
 		return ctx, err
 	}
 
-	// 11. emit events
+	// 10. emit events
 	txIdx := uint64(msgIndex) //nolint:gosec // G115
 	EmitTxHashEvent(ctx, ethMsg, decUtils.BlockTxIndex, txIdx)
 

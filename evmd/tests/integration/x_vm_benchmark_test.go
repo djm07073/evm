@@ -48,8 +48,14 @@ func BenchmarkApplyTransaction(b *testing.B) {
 		err = msg.Sign(ethSigner, krSigner)
 		require.NoError(b, err)
 
+		// Add core.Message to context to simulate ante handler behavior
+		ctx := suite.Network.GetContext()
+		coreMsg, err := msg.AsMessage(big.NewInt(0))
+		require.NoError(b, err)
+		ctx = ctx.WithValue(evmtypes.CoreMessageKey, coreMsg)
+
 		b.StartTimer()
-		resp, err := suite.Network.App.GetEVMKeeper().ApplyTransaction(suite.Network.GetContext(), msg)
+		resp, err := suite.Network.App.GetEVMKeeper().ApplyTransaction(ctx, msg)
 		b.StopTimer()
 
 		require.NoError(b, err)
