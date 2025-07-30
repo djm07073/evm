@@ -176,7 +176,7 @@ func (md MonoDecorator) AnteHandle(ctx sdk.Context, tx sdk.Tx, simulate bool, ne
 	}
 
 	// 8. gas consumption
-	msgFees, err := evmkeeper.VerifyFee(
+	_, err = evmkeeper.VerifyFee(
 		txData,
 		evmDenom,
 		decUtils.BaseFee,
@@ -189,15 +189,7 @@ func (md MonoDecorator) AnteHandle(ctx sdk.Context, tx sdk.Tx, simulate bool, ne
 		return ctx, err
 	}
 
-	err = ConsumeFeesAndEmitEvent(
-		ctx,
-		md.evmKeeper,
-		msgFees,
-		from,
-	)
-	if err != nil {
-		return ctx, err
-	}
+	// delete ConsumeFeesAndEmitEvent
 
 	gasWanted := UpdateCumulativeGasWanted(
 		ctx,

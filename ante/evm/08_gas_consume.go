@@ -3,9 +3,6 @@ package evm
 import (
 	"math/big"
 
-	"github.com/ethereum/go-ethereum/common"
-
-	anteinterfaces "github.com/cosmos/evm/ante/interfaces"
 	"github.com/cosmos/evm/types"
 	evmtypes "github.com/cosmos/evm/x/vm/types"
 
@@ -35,52 +32,52 @@ func UpdateCumulativeGasWanted(
 	return cumulativeGasWanted
 }
 
-// ConsumeFeesAndEmitEvent deduces fees from sender and emits the event
-func ConsumeFeesAndEmitEvent(
-	ctx sdktypes.Context,
-	evmKeeper anteinterfaces.EVMKeeper,
-	fees sdktypes.Coins,
-	from sdktypes.AccAddress,
-) error {
-	if err := deductFees(
-		ctx,
-		evmKeeper,
-		fees,
-		from,
-	); err != nil {
-		return err
-	}
+// // ConsumeFeesAndEmitEvent deduces fees from sender and emits the event
+// func ConsumeFeesAndEmitEvent(
+// 	ctx sdktypes.Context,
+// 	evmKeeper anteinterfaces.EVMKeeper,
+// 	fees sdktypes.Coins,
+// 	from sdktypes.AccAddress,
+// ) error {
+// 	if err := deductFees(
+// 		ctx,
+// 		evmKeeper,
+// 		fees,
+// 		from,
+// 	); err != nil {
+// 		return err
+// 	}
 
-	ctx.EventManager().EmitEvent(
-		sdktypes.NewEvent(
-			sdktypes.EventTypeTx,
-			sdktypes.NewAttribute(sdktypes.AttributeKeyFee, fees.String()),
-		),
-	)
-	return nil
-}
+// 	ctx.EventManager().EmitEvent(
+// 		sdktypes.NewEvent(
+// 			sdktypes.EventTypeTx,
+// 			sdktypes.NewAttribute(sdktypes.AttributeKeyFee, fees.String()),
+// 		),
+// 	)
+// 	return nil
+// }
 
-// deductFee checks if the fee payer has enough funds to pay for the fees and deducts them.
-func deductFees(
-	ctx sdktypes.Context,
-	evmKeeper anteinterfaces.EVMKeeper,
-	fees sdktypes.Coins,
-	feePayer sdktypes.AccAddress,
-) error {
-	if fees.IsZero() {
-		return nil
-	}
+// // deductFee checks if the fee payer has enough funds to pay for the fees and deducts them.
+// func deductFees(
+// 	ctx sdktypes.Context,
+// 	evmKeeper anteinterfaces.EVMKeeper,
+// 	fees sdktypes.Coins,
+// 	feePayer sdktypes.AccAddress,
+// ) error {
+// 	if fees.IsZero() {
+// 		return nil
+// 	}
 
-	if err := evmKeeper.DeductTxCostsFromUserBalance(
-		ctx,
-		fees,
-		common.BytesToAddress(feePayer),
-	); err != nil {
-		return errorsmod.Wrapf(err, "failed to deduct transaction costs from user balance")
-	}
+// 	if err := evmKeeper.DeductTxCostsFromUserBalance(
+// 		ctx,
+// 		fees,
+// 		common.BytesToAddress(feePayer),
+// 	); err != nil {
+// 		return errorsmod.Wrapf(err, "failed to deduct transaction costs from user balance")
+// 	}
 
-	return nil
-}
+// 	return nil
+// }
 
 // GetMsgPriority returns the priority of an Eth Tx capped by the minimum priority
 func GetMsgPriority(
