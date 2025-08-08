@@ -146,6 +146,8 @@ func (md MonoDecorator) AnteHandle(ctx sdk.Context, tx sdk.Tx, simulate bool, ne
 			"failed to create an ethereum core.Message from signer %T", decUtils.Signer,
 		)
 	}
+	// Store the message in context to avoid recomputation in ApplyTransaction
+	ctx = ctx.WithValue(evmtypes.CoreMessageKey, coreMsg)
 
 	// 7. validate transaction costs (combines balance and can transfer checks)
 	if err := ValidateTransactionCosts(

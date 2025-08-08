@@ -62,3 +62,9 @@ func AddressStoragePrefix(address common.Address) []byte {
 func StateKey(address common.Address, key []byte) []byte {
 	return append(AddressStoragePrefix(address), key...)
 }
+
+// contextKey is a type used for context values
+type contextKey string
+
+// CoreMessageKey is the key to store core.Message in context
+const CoreMessageKey contextKey = "coreMessage"

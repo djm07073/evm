@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core"
 	ethtypes "github.com/ethereum/go-ethereum/core/types"
 	"github.com/stretchr/testify/require"
 
@@ -48,8 +49,16 @@ func BenchmarkApplyTransaction(b *testing.B) {
 		err = msg.Sign(ethSigner, krSigner)
 		require.NoError(b, err)
 
+		// Simulate ante handler behavior by pre-decoding the message
+		ctx := suite.Network.GetContext()
+		ethTxSigned := msg.AsTransaction()
+		signer := ethtypes.MakeSigner(evmtypes.GetEthChainConfig(), big.NewInt(ctx.BlockHeight()), uint64(ctx.BlockTime().Unix()))
+		coreMsg, err := core.TransactionToMessage(ethTxSigned, signer, nil)
+		require.NoError(b, err)
+		ctx = ctx.WithValue(evmtypes.CoreMessageKey, coreMsg)
+
 		b.StartTimer()
-		resp, err := suite.Network.App.GetEVMKeeper().ApplyTransaction(suite.Network.GetContext(), msg)
+		resp, err := suite.Network.App.GetEVMKeeper().ApplyTransaction(ctx, msg)
 		b.StopTimer()
 
 		require.NoError(b, err)
