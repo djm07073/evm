@@ -3,7 +3,6 @@ package evm
 import (
 	"math/big"
 
-	"github.com/ethereum/go-ethereum/common"
 	ethtypes "github.com/ethereum/go-ethereum/core/types"
 
 	anteinterfaces "github.com/cosmos/evm/ante/interfaces"
@@ -138,24 +137,8 @@ func (md MonoDecorator) AnteHandle(ctx sdk.Context, tx sdk.Tx, simulate bool, ne
 	}
 
 	from := ethMsg.GetFrom()
-	fromAddr := common.BytesToAddress(from)
 
-	// 6. account balance verification
-	// We get the account with the balance from the EVM keeper because it is
-	// using a wrapper of the bank keeper as a dependency to scale all
-	// balances to 18 decimals.
-	account := md.evmKeeper.GetAccount(ctx, fromAddr)
-	if err := VerifyAccountBalance(
-		ctx,
-		md.accountKeeper,
-		account,
-		fromAddr,
-		txData,
-	); err != nil {
-		return ctx, err
-	}
-
-	// 7. can transfer
+	// 6. create core message
 	coreMsg, err := ethMsg.AsMessage(decUtils.BaseFee)
 	if err != nil {
 		return ctx, errorsmod.Wrapf(
@@ -163,14 +146,17 @@ func (md MonoDecorator) AnteHandle(ctx sdk.Context, tx sdk.Tx, simulate bool, ne
 			"failed to create an ethereum core.Message from signer %T", decUtils.Signer,
 		)
 	}
+	// Store the message in context to avoid recomputation in ApplyTransaction
+	ctx = ctx.WithValue(evmtypes.CoreMessageKey, coreMsg)
 
-	if err := CanTransfer(
+	// 7. validate transaction costs (combines balance and can transfer checks)
+	if err := ValidateTransactionCosts(
 		ctx,
 		md.evmKeeper,
-		*coreMsg,
+		coreMsg,
+		txData,
 		decUtils.BaseFee,
-		decUtils.EvmParams,
-		decUtils.Rules.IsLondon,
+		decUtils.Rules,
 	); err != nil {
 		return ctx, err
 	}
