@@ -18,6 +18,7 @@ import (
 	"github.com/cosmos/evm/rpc/backend"
 	"github.com/cosmos/evm/rpc/types"
 
+	sdk "github.com/cosmos/cosmos-sdk/types"
 	"cosmossdk.io/log"
 )
 
@@ -95,9 +96,6 @@ func (f *Filter) Logs(_ context.Context, logLimit int, blockLimit int64) ([]*eth
 		return nil, nil
 	}
 
-	logs := []*ethtypes.Log{}
-	var err error
-
 	// If we're doing singleton block filtering, execute and return
 	if f.criteria.BlockHash != nil && *f.criteria.BlockHash != (common.Hash{}) {
 		resBlock, err := f.backend.TendermintBlockByHash(*f.criteria.BlockHash)
@@ -172,31 +170,20 @@ func (f *Filter) Logs(_ context.Context, logLimit int, blockLimit int64) ([]*eth
 		return nil, fmt.Errorf("maximum [from, to] blocks distance: %d", blockLimit)
 	}
 
-	for height := from; height <= to; height++ {
-		h := int64(height) //#nosec G115
-		blockRes, err := f.backend.TendermintBlockResultByNumber(&h)
-		if err != nil {
-			f.logger.Debug("failed to fetch block result from Tendermint", "height", height, "error", err.Error())
-			return nil, nil
-		}
-
-		bloom, err := f.backend.BlockBloom(blockRes)
-		if err != nil {
-			return nil, err
-		}
-
-		filtered, err := f.blockLogs(blockRes, bloom)
-		if err != nil {
-			return nil, errors.Wrapf(err, "failed to fetch block by number %d", height)
-		}
-
-		// check logs limit
-		if len(logs)+len(filtered) > logLimit {
-			return nil, fmt.Errorf("query returned more than %d results", logLimit)
-		}
-		logs = append(logs, filtered...)
+	// Use FilterMaps for efficient log retrieval
+	fromBig := new(big.Int).SetUint64(from)
+	toBig := new(big.Int).SetUint64(to)
+	filterLogs, err := f.backend.GetFilterLogs(sdk.Context{}, fromBig, toBig, f.criteria.Addresses, f.criteria.Topics)
+	if err != nil {
+		return nil, err
 	}
-	return logs, nil
+	
+	// Check logs limit
+	if len(filterLogs) > logLimit {
+		return nil, fmt.Errorf("query returned more than %d results", logLimit)
+	}
+	
+	return filterLogs, nil
 }
 
 // blockLogs returns the logs matching the filter criteria within a single block.

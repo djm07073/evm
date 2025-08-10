@@ -148,10 +148,6 @@ func (k Keeper) GetHashFn(ctx sdk.Context) vm.GetHashFunc {
 //
 // For relevant discussion see: https://github.com/cosmos/cosmos-sdk/discussions/9072
 func (k *Keeper) ApplyTransaction(ctx sdk.Context, msgEth *types.MsgEthereumTx) (*types.MsgEthereumTxResponse, error) {
-	var (
-		bloom        *big.Int
-		bloomReceipt ethtypes.Bloom
-	)
 
 	cfg, err := k.EVMConfig(ctx, sdk.ConsAddress(ctx.BlockHeader().ProposerAddress))
 	if err != nil {
@@ -183,13 +179,6 @@ func (k *Keeper) ApplyTransaction(ctx sdk.Context, msgEth *types.MsgEthereumTx) 
 
 	logs := types.LogsToEthereum(res.Logs)
 
-	// Compute block bloom filter
-	if len(logs) > 0 {
-		bloom = k.GetBlockBloomTransient(ctx)
-		bloom.Or(bloom, big.NewInt(0).SetBytes(ethtypes.CreateBloom(&ethtypes.Receipt{Logs: logs}).Bytes()))
-		bloomReceipt = ethtypes.BytesToBloom(bloom.Bytes())
-	}
-
 	if !res.Failed() {
 		var contractAddr common.Address
 		if msg.To == nil {
@@ -209,7 +198,7 @@ func (k *Keeper) ApplyTransaction(ctx sdk.Context, msgEth *types.MsgEthereumTx) 
 			Type:              ethTx.Type(),
 			PostState:         nil,
 			CumulativeGasUsed: cumulativeGasUsed,
-			Bloom:             bloomReceipt,
+			Bloom:             ethtypes.Bloom{}, // Empty bloom
 			Logs:              logs,
 			TxHash:            txConfig.TxHash,
 			ContractAddress:   contractAddr,
@@ -253,8 +242,7 @@ func (k *Keeper) ApplyTransaction(ctx sdk.Context, msgEth *types.MsgEthereumTx) 
 	}
 
 	if len(logs) > 0 {
-		// Update transient block bloom filter
-		k.SetBlockBloomTransient(ctx, bloom)
+		// Update log size transient
 		k.SetLogSizeTransient(ctx, uint64(txConfig.LogIndex)+uint64(len(logs)))
 	}
 

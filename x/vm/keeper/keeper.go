@@ -19,7 +19,6 @@ import (
 	errorsmod "cosmossdk.io/errors"
 	"cosmossdk.io/log"
 	"cosmossdk.io/math"
-	"cosmossdk.io/store/prefix"
 	storetypes "cosmossdk.io/store/types"
 
 	"github.com/cosmos/cosmos-sdk/codec"
@@ -124,39 +123,9 @@ func (k Keeper) Logger(ctx sdk.Context) log.Logger {
 // Required by Web3 API.
 // ----------------------------------------------------------------------------
 
-// EmitBlockBloomEvent emit block bloom events
-func (k Keeper) EmitBlockBloomEvent(ctx sdk.Context, bloom ethtypes.Bloom) {
-	ctx.EventManager().EmitEvent(
-		sdk.NewEvent(
-			types.EventTypeBlockBloom,
-			sdk.NewAttribute(types.AttributeKeyEthereumBloom, string(bloom.Bytes())),
-		),
-	)
-}
-
 // GetAuthority returns the x/evm module authority address
 func (k Keeper) GetAuthority() sdk.AccAddress {
 	return k.authority
-}
-
-// GetBlockBloomTransient returns bloom bytes for the current block height
-func (k Keeper) GetBlockBloomTransient(ctx sdk.Context) *big.Int {
-	store := prefix.NewStore(ctx.TransientStore(k.transientKey), types.KeyPrefixTransientBloom)
-	heightBz := sdk.Uint64ToBigEndian(uint64(ctx.BlockHeight())) //nolint:gosec // G115 // won't exceed uint64
-	bz := store.Get(heightBz)
-	if len(bz) == 0 {
-		return big.NewInt(0)
-	}
-
-	return new(big.Int).SetBytes(bz)
-}
-
-// SetBlockBloomTransient sets the given bloom bytes to the transient store. This value is reset on
-// every block.
-func (k Keeper) SetBlockBloomTransient(ctx sdk.Context, bloom *big.Int) {
-	store := prefix.NewStore(ctx.TransientStore(k.transientKey), types.KeyPrefixTransientBloom)
-	heightBz := sdk.Uint64ToBigEndian(uint64(ctx.BlockHeight())) //nolint:gosec // G115 // won't exceed uint64
-	store.Set(heightBz, bloom.Bytes())
 }
 
 // ----------------------------------------------------------------------------

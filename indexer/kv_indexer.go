@@ -1,14 +1,17 @@
 package indexer
 
 import (
+	"encoding/json"
 	"fmt"
 
 	"github.com/ethereum/go-ethereum/common"
+	ethtypes "github.com/ethereum/go-ethereum/core/types"
 
 	abci "github.com/cometbft/cometbft/abci/types"
 	cmttypes "github.com/cometbft/cometbft/types"
 
 	dbm "github.com/cosmos/cosmos-db"
+	"github.com/cosmos/evm/indexer/filtermap"
 	rpctypes "github.com/cosmos/evm/rpc/types"
 	cosmosevmtypes "github.com/cosmos/evm/types"
 	evmtypes "github.com/cosmos/evm/x/vm/types"
@@ -32,23 +35,22 @@ const (
 
 var _ cosmosevmtypes.EVMTxIndexer = &KVIndexer{}
 
-// KVIndexer implements a eth tx indexer on a KV db.
 type KVIndexer struct {
-	db        dbm.DB
-	logger    log.Logger
-	clientCtx client.Context
+	db         dbm.DB
+	logger     log.Logger
+	clientCtx  client.Context
+	filterMaps *filtermap.FilterMapsIndexer
 }
 
-// NewKVIndexer creates the KVIndexer
 func NewKVIndexer(db dbm.DB, logger log.Logger, clientCtx client.Context) *KVIndexer {
-	return &KVIndexer{db, logger, clientCtx}
+	return &KVIndexer{
+		db:         db,
+		logger:     logger,
+		clientCtx:  clientCtx,
+		filterMaps: filtermap.NewFilterMapsIndexer(db, logger),
+	}
 }
 
-// IndexBlock index all the eth txs in a block through the following steps:
-// - Iterates over all of the Txs in Block
-// - Parses eth Tx infos from cosmos-sdk events for every TxResult
-// - Iterates over all the messages of the Tx
-// - Builds and stores a indexer.TxResult based on parsed events for every message
 func (kv *KVIndexer) IndexBlock(block *cmttypes.Block, txResults []*abci.ExecTxResult) error {
 	height := block.Height
 
@@ -115,6 +117,23 @@ func (kv *KVIndexer) IndexBlock(block *cmttypes.Block, txResults []*abci.ExecTxR
 			if err := saveTxResult(kv.clientCtx.Codec, batch, txHash, &txResult); err != nil {
 				return errorsmod.Wrapf(err, "IndexBlock %d", height)
 			}
+
+			// Index logs for this transaction using FilterMaps
+			if kv.filterMaps != nil && result.Code == abci.CodeTypeOK {
+				// Parse logs from events for this specific message
+				logs, err := TxLogsFromEvents(result.Events, msgIndex)
+				if err == nil && len(logs) > 0 {
+					// Set additional fields for the logs
+					for i, log := range logs {
+						log.BlockNumber = uint64(height)
+						log.TxHash = txHash
+						log.TxIndex = uint(txIndex)
+						log.BlockHash = common.BytesToHash(block.Hash())
+						log.Index = uint(i)
+					}
+					kv.filterMaps.IndexLogs(uint64(height), logs)
+				}
+			}
 		}
 	}
 	if err := batch.Write(); err != nil {
@@ -159,6 +178,46 @@ func (kv *KVIndexer) GetByBlockAndIndex(blockNumber int64, txIndex int32) (*cosm
 		return nil, fmt.Errorf("tx not found, block: %d, eth-index: %d", blockNumber, txIndex)
 	}
 	return kv.GetByTxHash(common.BytesToHash(bz))
+}
+
+// GetFilterMaps returns the FilterMapsIndexer for log queries
+func (kv *KVIndexer) GetFilterMaps() *filtermap.FilterMapsIndexer {
+	return kv.filterMaps
+}
+
+// TxLogsFromEvents parses ethereum logs from cosmos events for specific msg index
+func TxLogsFromEvents(events []abci.Event, msgIndex int) ([]*ethtypes.Log, error) {
+	for _, event := range events {
+		if event.Type != evmtypes.EventTypeTxLog {
+			continue
+		}
+
+		if msgIndex > 0 {
+			msgIndex--
+			continue
+		}
+
+		return ParseTxLogsFromEvent(event)
+	}
+	return nil, fmt.Errorf("eth tx logs not found for message index %d", msgIndex)
+}
+
+// ParseTxLogsFromEvent parse tx logs from one event
+func ParseTxLogsFromEvent(event abci.Event) ([]*ethtypes.Log, error) {
+	logs := make([]*evmtypes.Log, 0, len(event.Attributes))
+	for _, attr := range event.Attributes {
+		if string(attr.Key) != evmtypes.AttributeKeyTxLog {
+			continue
+		}
+
+		var txLog evmtypes.Log
+		if err := json.Unmarshal([]byte(attr.Value), &txLog); err != nil {
+			return nil, err
+		}
+
+		logs = append(logs, &txLog)
+	}
+	return evmtypes.LogsToEthereum(logs), nil
 }
 
 // TxHashKey returns the key for db entry: `tx hash -> tx result struct`
