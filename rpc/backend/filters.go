@@ -1,12 +1,17 @@
 package backend
 
 import (
+	"math/big"
+	
 	"github.com/ethereum/go-ethereum/common"
 	ethtypes "github.com/ethereum/go-ethereum/core/types"
 	"github.com/pkg/errors"
+	
+	"github.com/cosmos/evm/indexer"
+	
+	sdk "github.com/cosmos/cosmos-sdk/types"
 )
 
-// GetLogs returns all the logs from all the ethereum transactions in a block.
 func (b *Backend) GetLogs(hash common.Hash) ([][]*ethtypes.Log, error) {
 	resBlock, err := b.TendermintBlockByHash(hash)
 	if err != nil {
@@ -18,9 +23,7 @@ func (b *Backend) GetLogs(hash common.Hash) ([][]*ethtypes.Log, error) {
 	return b.GetLogsByHeight(&resBlock.Block.Height)
 }
 
-// GetLogsByHeight returns all the logs from all the ethereum transactions in a block.
 func (b *Backend) GetLogsByHeight(height *int64) ([][]*ethtypes.Log, error) {
-	// NOTE: we query the state in case the tx result logs are not persisted after an upgrade.
 	blockRes, err := b.RPCClient.BlockResults(b.Ctx, height)
 	if err != nil {
 		return nil, err
@@ -29,8 +32,20 @@ func (b *Backend) GetLogsByHeight(height *int64) ([][]*ethtypes.Log, error) {
 	return GetLogsFromBlockResults(blockRes)
 }
 
-// BloomStatus returns the BloomBitsBlocks and the number of processed sections maintained
-// by the chain indexer.
 func (b *Backend) BloomStatus() (uint64, uint64) {
-	return 4096, 0
+	return 0, 0
+}
+
+func (b *Backend) GetFilterLogs(ctx sdk.Context, fromBlock, toBlock *big.Int, addresses []common.Address, topics [][]common.Hash) ([]*ethtypes.Log, error) {
+	if kvIndexer, ok := b.Indexer.(*indexer.KVIndexer); ok {
+		if filterMaps := kvIndexer.GetFilterMaps(); filterMaps != nil {
+			return filterMaps.GetLogs(ctx, fromBlock, toBlock, addresses, topics)
+		}
+	}
+	
+	return []*ethtypes.Log{}, nil
+}
+
+func (b *Backend) GetLogsFromBloomFilter(fromBlock, toBlock *big.Int, addresses []common.Address, topics [][]common.Hash) ([]*ethtypes.Log, error) {
+	return b.GetFilterLogs(sdk.Context{}, fromBlock, toBlock, addresses, topics)
 }

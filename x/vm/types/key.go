@@ -31,7 +31,7 @@ const (
 
 // prefix bytes for the EVM transient store
 const (
-	prefixTransientBloom = iota + 1
+	prefixTransientBloom = iota + 1 // DEPRECATED: Using FilterMaps instead
 	prefixTransientTxIndex
 	prefixTransientLogSize
 	prefixTransientGasUsed
@@ -47,7 +47,7 @@ var (
 
 // Transient Store key prefixes
 var (
-	KeyPrefixTransientBloom   = []byte{prefixTransientBloom}
+	KeyPrefixTransientBloom   = []byte{prefixTransientBloom} // DEPRECATED: Using FilterMaps instead
 	KeyPrefixTransientTxIndex = []byte{prefixTransientTxIndex}
 	KeyPrefixTransientLogSize = []byte{prefixTransientLogSize}
 	KeyPrefixTransientGasUsed = []byte{prefixTransientGasUsed}

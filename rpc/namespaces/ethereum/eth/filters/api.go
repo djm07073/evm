@@ -3,6 +3,7 @@ package filters
 import (
 	"context"
 	"fmt"
+	"math/big"
 	"sync"
 	"time"
 
@@ -19,6 +20,7 @@ import (
 	"github.com/cosmos/evm/rpc/types"
 	evmtypes "github.com/cosmos/evm/x/vm/types"
 
+	sdk "github.com/cosmos/cosmos-sdk/types"
 	"cosmossdk.io/log"
 
 	"github.com/cosmos/cosmos-sdk/client"
@@ -52,6 +54,7 @@ type Backend interface {
 	BlockBloom(blockRes *coretypes.ResultBlockResults) (ethtypes.Bloom, error)
 
 	BloomStatus() (uint64, uint64)
+	GetFilterLogs(ctx sdk.Context, fromBlock, toBlock *big.Int, addresses []common.Address, topics [][]common.Hash) ([]*ethtypes.Log, error)
 
 	RPCFilterCap() int32
 	RPCLogsCap() int32
