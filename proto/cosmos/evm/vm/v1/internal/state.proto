@@ -1,0 +1,40 @@
+syntax = "proto3";
+
+option go_package = "github.com/cosmos/evm/x/vm/types";
+package cosmos.evm.vm.v1.internal;
+
+// Internal types for EVM state management (revmc/revmffi integration)
+// Use raw bytes for efficiency, unlike v1 types which use hex strings for external API
+
+// InternalAccount represents an Ethereum account's state.
+// This is the core account structure used during EVM execution.
+message InternalAccount {
+  bytes balance = 1; // 32 bytes - Account balance in wei (U256)
+  uint64 nonce = 2; // Transaction count / account nonce
+  bytes code_hash = 3; // 32 bytes - Keccak256 hash of the account's bytecode (empty hash for EOAs)
+  bytes code = 4; // Account bytecode (empty for EOAs, contract code for smart contracts)
+}
+
+// InternalAccounts is a collection of account states.
+// Used for batch state operations and snapshots.
+message InternalAccounts {
+    map<string, InternalAccount> accounts = 1; // address (hex string) => InternalAccount
+}
+
+// InternalStorage represents the storage trie of a single account.
+// Each entry maps a 32-byte storage key to a 32-byte storage value.
+message InternalStorage {
+    map<string, bytes> storage = 1; // key (hex string of 32 bytes) => value (32 bytes, U256)
+}
+
+// InternalStorages is a collection of storage tries for multiple accounts.
+// Used for batch storage operations and state snapshots.
+message InternalStorages {
+    map<string, InternalStorage> storages = 1; // address (hex string) => InternalStorage
+}
+
+// InternalDeleted tracks accounts that have been self-destructed.
+// Self-destructed accounts are removed from state at the end of transaction execution.
+message InternalDeleted {
+    repeated bytes deleted = 1; // List of self-destructed account addresses (20 bytes each)
+}

@@ -12,6 +12,7 @@ import (
 	ethparams "github.com/ethereum/go-ethereum/params"
 	"github.com/holiman/uint256"
 
+	serverconfig "github.com/cosmos/evm/server/config"
 	evmmempool "github.com/cosmos/evm/mempool"
 	"github.com/cosmos/evm/utils"
 	"github.com/cosmos/evm/x/vm/statedb"
@@ -81,7 +82,14 @@ type Keeper struct {
 	// evmMempool is the custom EVM appside mempool
 	// if it is nil, the default comet mempool will be used
 	evmMempool *evmmempool.ExperimentalEVMMempool
+
+	// FFI EVM configuration (revmc)
+	ffiEnabled     bool
+	compilerConfig *CompilerConfig
 }
+
+// CompilerConfig is imported from server config
+type CompilerConfig = serverconfig.CompilerConfig
 
 // NewKeeper generates new evm module keeper
 func NewKeeper(
@@ -97,6 +105,8 @@ func NewKeeper(
 	erc20Keeper types.Erc20Keeper,
 	evmChainID uint64,
 	tracer string,
+	ffiEnabled bool,
+	compilerConfig *CompilerConfig,
 ) *Keeper {
 	// ensure evm module account is set
 	if addr := ak.GetModuleAddress(types.ModuleName); addr == nil {
@@ -131,6 +141,8 @@ func NewKeeper(
 		consensusKeeper:  consensusKeeper,
 		erc20Keeper:      erc20Keeper,
 		storeKeys:        keys,
+		ffiEnabled:       ffiEnabled,
+		compilerConfig:   compilerConfig,
 	}
 }
 

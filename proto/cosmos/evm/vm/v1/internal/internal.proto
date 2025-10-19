@@ -1,0 +1,85 @@
+syntax = "proto3";
+
+option go_package = "github.com/cosmos/evm/x/vm/types";
+package cosmos.evm.vm.v1.internal;
+
+// Internal types for EVM execution layer (revmc/revmffi integration)
+// These types use raw bytes for efficiency in the EVM execution engine,
+// unlike v1 types which use hex-encoded strings for Cosmos SDK external APIs.
+
+// InternalStorageKey represents a 32-byte storage slot key in EVM state.
+// Used in access lists to pre-warm specific storage slots (EIP-2930).
+message InternalStorageKey {
+    bytes value = 1; // 32 bytes - storage slot key (U256)
+}
+
+// InternalAccessListItem represents an access list entry (EIP-2930/EIP-2929).
+// Access lists allow transactions to pre-declare which addresses and storage slots
+// they will access, receiving a gas discount for pre-warming.
+message InternalAccessListItem {
+    bytes address = 1; // 20 bytes - Ethereum account address
+    repeated InternalStorageKey storage_keys = 2; // Storage slots to pre-warm
+}
+
+// InternalTransaction represents a unified EVM transaction structure for internal execution.
+// This consolidates all transaction types (Legacy, EIP-2930, EIP-1559, EIP-4844, EIP-7702)
+// into a single format for the execution layer, allowing the EVM to handle all types uniformly.
+message InternalTransaction {
+    bytes caller = 1; // 20 bytes - Transaction sender address (recovered from signature)
+    uint64 gas_limit = 2; // Maximum gas units allowed for execution
+    bytes gas_price = 3; // 32 bytes - Gas price in wei (U256) - for legacy txs or effective gas price
+    optional uint64 nonce = 4; // Account nonce - optional for certain transaction types
+    bytes transact_to = 5; // 20 bytes - Recipient address (empty bytes for contract creation)
+    bytes value = 6; // 32 bytes - ETH value to transfer in wei (U256)
+    bytes data = 7; // Transaction calldata or contract creation code
+    bytes gas_priority_fee = 8; // 32 bytes - Priority fee per gas (EIP-1559) in wei (U256)
+    repeated InternalAccessListItem access_list = 9; // Access list for gas optimization (EIP-2930)
+    repeated bytes blob_hashes = 10; // 32 bytes each - Versioned blob hashes (EIP-4844) for data availability
+    bytes max_fee_per_blob_gas = 11; // 32 bytes - Maximum fee per blob gas unit (EIP-4844) in wei (U256)
+    optional InternalAuthorizationList authorization_list = 12; // Authorization list (EIP-7702) for account abstraction
+}
+
+// InternalSignedAuthorizationList contains signed authorization entries (EIP-7702).
+// Used to authorize code delegation before signature recovery.
+message InternalSignedAuthorizationList {
+    repeated InternalSignedAuthorization signed = 1; // List of signed authorizations
+}
+
+// InternalSignedAuthorization represents a single signed authorization (EIP-7702).
+// Contains the authorization data along with ECDSA signature components.
+message InternalSignedAuthorization {
+    InternalAuthorization inner = 1; // The authorization being signed
+    bytes y_parity = 2; // 1 byte - ECDSA recovery id (0 or 1)
+    bytes r = 3; // 32 bytes - ECDSA signature r component
+    bytes s = 4; // 32 bytes - ECDSA signature s component
+}
+
+// InternalRecoveredAuthorizationList contains authorizations with recovered addresses (EIP-7702).
+// Used after signature recovery has been performed.
+message InternalRecoveredAuthorizationList {
+    repeated InternalRecoveredAuthorization recovered = 1; // List of recovered authorizations
+}
+
+// InternalRecoveredAuthorization represents an authorization with recovered authority (EIP-7702).
+// The authority field contains the address that signed the authorization.
+message InternalRecoveredAuthorization {
+    InternalAuthorization inner = 1; // The authorization data
+    bytes authority = 2; // 20 bytes - Recovered signer address
+}
+
+// InternalAuthorizationList is a union type containing either signed or recovered authorizations (EIP-7702).
+// Only one variant should be present at a time.
+message InternalAuthorizationList {
+    oneof authorization_list {
+        InternalSignedAuthorizationList signed = 1; // Authorizations before recovery
+        InternalRecoveredAuthorizationList recovered = 2; // Authorizations after recovery
+    }
+}
+
+// InternalAuthorization represents an EIP-7702 authorization entry.
+// Allows an EOA to temporarily delegate its code to another address.
+message InternalAuthorization {
+    uint64 chain_id = 1; // Chain ID to prevent cross-chain replay attacks
+    bytes address = 2; // 20 bytes - Address whose code to delegate to
+    uint64 nonce = 3; // Nonce for replay protection
+}

@@ -398,6 +398,10 @@ func (k *Keeper) ApplyMessageWithConfig(
 	)
 
 	stateDB := statedb.New(ctx, k, txConfig)
+	if k.ffiEnabled {
+		return k.applyMessageWithFFI(ctx, msg, tracer, commit, cfg, stateDB)
+	}
+	
 	ethCfg := types.GetEthChainConfig()
 	evm := k.NewEVMWithOverridePrecompiles(ctx, msg, cfg, tracer, stateDB, overrides == nil)
 	// Gas limit suffices for the floor data cost (EIP-7623)

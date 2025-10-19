@@ -6,6 +6,7 @@ import (
 	"math/big"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/crypto"
 
 	"github.com/cosmos/evm/x/vm/statedb"
@@ -31,6 +32,17 @@ type EVMKeeper struct {
 	accounts  map[common.Address]Account
 	codes     map[common.Hash][]byte
 	storeKeys map[string]*storetypes.KVStoreKey
+	blocks    map[uint64]common.Hash
+}
+
+// GetHashFn implements statedb.Keeper.
+func (k *EVMKeeper) GetHashFn(ctx sdk.Context) vm.GetHashFunc {
+	return func(u uint64) common.Hash {
+		if hash, ok := k.blocks[u]; ok {
+			return hash
+		}
+		return common.Hash{}
+	}
 }
 
 func NewEVMKeeper() *EVMKeeper {
@@ -38,6 +50,7 @@ func NewEVMKeeper() *EVMKeeper {
 		accounts:  make(map[common.Address]Account),
 		codes:     make(map[common.Hash][]byte),
 		storeKeys: make(map[string]*storetypes.KVStoreKey),
+		blocks:    make(map[uint64]common.Hash),
 	}
 }
 
@@ -118,7 +131,8 @@ func (k EVMKeeper) Clone() *EVMKeeper {
 	accounts := maps.Clone(k.accounts)
 	codes := maps.Clone(k.codes)
 	storeKeys := maps.Clone(k.storeKeys)
-	return &EVMKeeper{accounts, codes, storeKeys}
+	blocks := maps.Clone(k.blocks)
+	return &EVMKeeper{accounts, codes, storeKeys, blocks}
 }
 
 func (k EVMKeeper) KVStoreKeys() map[string]*storetypes.KVStoreKey {

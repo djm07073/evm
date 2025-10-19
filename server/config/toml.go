@@ -22,6 +22,20 @@ cache-preimage = {{ .EVM.EnablePreimageRecording }}
 # EVMChainID is the EIP-155 compatible replay protection chain ID. This is separate from the Cosmos chain ID.
 evm-chain-id = {{ .EVM.EVMChainID }}
 
+# FFIEnabled enables the FFI-based EVM (revmc) instead of the default geth VM
+ffi-enabled = {{ .EVM.FFIEnabled }}
+
+{{- if .EVM.Compiler }}
+# Compiler configuration for FFI EVM (revmc AOT compilation)
+[evm.compiler]
+
+# Threshold defines the number of times a contract must be executed before AOT compilation
+threshold = {{ .EVM.Compiler.Threshold }}
+
+# MaxConcurrent defines the maximum number of concurrent compilation workers
+max-concurrent = {{ .EVM.Compiler.MaxConcurrent }}
+{{- end }}
+
 # MinTip defines the minimum priority fee for the mempool.
 min-tip = {{ .EVM.MinTip }}
 

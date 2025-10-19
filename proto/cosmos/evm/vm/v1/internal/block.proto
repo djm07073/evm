@@ -1,0 +1,21 @@
+syntax = "proto3";
+
+option go_package = "github.com/cosmos/evm/x/vm/types";
+package cosmos.evm.vm.v1.internal;
+
+// Internal types for EVM block context (revmc/revmffi integration)
+// Use raw bytes for efficiency, unlike v1 types which use hex strings for external API
+
+// InternalBlock represents the block environment context for EVM execution.
+// This provides the EVM with information about the current block, accessible via opcodes
+// like NUMBER, COINBASE, TIMESTAMP, GASLIMIT, BASEFEE, DIFFICULTY, and PREVRANDAO.
+message InternalBlock {
+    bytes number = 1; // 32 bytes - Block number (U256), accessible via NUMBER opcode
+    bytes coinbase = 2; // 20 bytes - Block beneficiary address, accessible via COINBASE opcode
+    bytes timestamp = 3; // 32 bytes - Block timestamp in Unix seconds (U256), accessible via TIMESTAMP opcode
+    bytes gas_limit = 4; // 32 bytes - Block gas limit (U256), accessible via GASLIMIT opcode
+    bytes basefee = 5; // 32 bytes - Base fee per gas (EIP-1559) in wei (U256), accessible via BASEFEE opcode
+    bytes difficulty = 6; // 32 bytes - Block difficulty (U256), accessible via DIFFICULTY opcode (deprecated post-merge)
+    bytes prevrandao = 7; // 32 bytes - Previous block's RANDAO value (B256), accessible via PREVRANDAO opcode (replaces DIFFICULTY post-merge)
+    optional uint64 excess_blob_gas = 8; // Excess blob gas from previous block (EIP-4844), used for blob gas price calculation
+}

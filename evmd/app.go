@@ -440,6 +440,19 @@ func NewExampleApp(
 
 	// Set up EVM keeper
 	tracer := cast.ToString(appOpts.Get(srvflags.EVMTracer))
+	ffiEnabled := cast.ToBool(appOpts.Get(srvflags.EVMFFIEnabled))
+
+	var compilerConfig *evmkeeper.CompilerConfig
+	if ffiEnabled {
+		threshold := cast.ToUint64(appOpts.Get(srvflags.EVMCompilerThreshold))
+		maxConcurrent := cast.ToUint(appOpts.Get(srvflags.EVMCompilerMaxConcurrent))
+		if threshold > 0 {
+			compilerConfig = &evmkeeper.CompilerConfig{
+				Threshold:     threshold,
+				MaxConcurrent: maxConcurrent,
+			}
+		}
+	}
 
 	// NOTE: it's required to set up the EVM keeper before the ERC-20 keeper, because it is used in its instantiation.
 	app.EVMKeeper = evmkeeper.NewKeeper(
@@ -454,6 +467,8 @@ func NewExampleApp(
 		&app.Erc20Keeper,
 		evmChainID,
 		tracer,
+		ffiEnabled,
+		compilerConfig,
 	).WithStaticPrecompiles(
 		precompiletypes.DefaultStaticPrecompiles(
 			*app.StakingKeeper,

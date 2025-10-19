@@ -79,6 +79,9 @@ type StateDB struct {
 
 	// The count of calls to precompiles
 	precompileCallsCounter uint8
+
+	// blockCtx
+	blockCtx vm.BlockContext
 }
 
 func (s *StateDB) CreateContract(address common.Address) {
@@ -154,6 +157,10 @@ func New(ctx sdk.Context, keeper Keeper, txConfig TxConfig) *StateDB {
 		transientStorage: newTransientStorage(),
 		txConfig:         txConfig,
 	}
+}
+
+func (s *StateDB) SetBlockContext(bc vm.BlockContext) {
+	s.blockCtx = bc
 }
 
 // Keeper returns the underlying `Keeper`

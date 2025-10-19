@@ -98,6 +98,8 @@ func (suite *KeeperTestSuite) SetupTest() {
 		suite.erc20Keeper,
 		config.EighteenDecimalsChainID,
 		"",
+		false,
+		nil,
 	)
 }
 

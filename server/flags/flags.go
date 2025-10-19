@@ -69,6 +69,9 @@ const (
 	EVMMaxTxGasWanted          = "evm.max-tx-gas-wanted"
 	EVMEnablePreimageRecording = "evm.cache-preimage"
 	EVMChainID                 = "evm.evm-chain-id"
+	EVMFFIEnabled              = "evm.ffi-enabled"
+	EVMCompilerThreshold       = "evm.compiler.threshold"
+	EVMCompilerMaxConcurrent   = "evm.compiler.max-concurrent"
 	EVMMinTip                  = "evm.min-tip"
 	EvmGethMetricsAddress      = "evm.geth-metrics-address"
 

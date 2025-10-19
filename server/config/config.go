@@ -117,6 +117,15 @@ const (
 	// DefaultGasAdjustment value to use as default in gas-adjustment flag
 	DefaultGasAdjustment = 1.2
 
+	// DefaultFFIEnabled is the default value for FFI-based EVM
+	DefaultFFIEnabled = false
+
+	// DefaultCompilerThreshold is the default AOT compilation threshold
+	DefaultCompilerThreshold uint64 = 100
+
+	// DefaultCompilerMaxConcurrent is the default max concurrent compilation workers
+	DefaultCompilerMaxConcurrent uint = 4
+
 	// DefaultWSOrigins is the default origin for WebSocket connections
 	DefaultWSOrigins = "127.0.0.1"
 
@@ -153,6 +162,10 @@ type EVMConfig struct {
 	GethMetricsAddress string `mapstructure:"geth-metrics-address"`
 	// Mempool defines the EVM mempool configuration
 	Mempool MempoolConfig `mapstructure:"mempool"`
+	// FFIEnabled enables the FFI-based EVM (revmc) instead of the default geth VM
+	FFIEnabled bool `mapstructure:"ffi-enabled"`
+	// Compiler defines the AOT compiler configuration
+	Compiler *CompilerConfig `mapstructure:"compiler"`
 }
 
 // MempoolConfig defines the configuration for the EVM mempool transaction pool.
@@ -173,43 +186,12 @@ type MempoolConfig struct {
 	Lifetime time.Duration `mapstructure:"lifetime"`
 }
 
-// DefaultMempoolConfig returns the default mempool configuration
-func DefaultMempoolConfig() MempoolConfig {
-	return MempoolConfig{
-		PriceLimit:   1,             // Minimum gas price of 1 wei
-		PriceBump:    10,            // 10% price bump to replace transaction
-		AccountSlots: 16,            // 16 executable transaction slots per account
-		GlobalSlots:  5120,          // 4096 + 1024 = 5120 global executable slots
-		AccountQueue: 64,            // 64 non-executable transaction slots per account
-		GlobalQueue:  1024,          // 1024 global non-executable slots
-		Lifetime:     3 * time.Hour, // 3 hour lifetime for queued transactions
-	}
-}
-
-// Validate returns an error if the mempool configuration is invalid
-func (c MempoolConfig) Validate() error {
-	if c.PriceLimit < 1 {
-		return fmt.Errorf("price limit must be at least 1, got %d", c.PriceLimit)
-	}
-	if c.PriceBump < 1 {
-		return fmt.Errorf("price bump must be at least 1, got %d", c.PriceBump)
-	}
-	if c.AccountSlots < 1 {
-		return fmt.Errorf("account slots must be at least 1, got %d", c.AccountSlots)
-	}
-	if c.GlobalSlots < 1 {
-		return fmt.Errorf("global slots must be at least 1, got %d", c.GlobalSlots)
-	}
-	if c.AccountQueue < 1 {
-		return fmt.Errorf("account queue must be at least 1, got %d", c.AccountQueue)
-	}
-	if c.GlobalQueue < 1 {
-		return fmt.Errorf("global queue must be at least 1, got %d", c.GlobalQueue)
-	}
-	if c.Lifetime < 1 {
-		return fmt.Errorf("lifetime must be at least 1 nanosecond, got %s", c.Lifetime)
-	}
-	return nil
+// CompilerConfig defines the AOT compiler configuration for the FFI EVM
+type CompilerConfig struct {
+	// Threshold is the number of times a contract must be called before AOT compilation
+	Threshold uint64 `mapstructure:"threshold"`
+	// MaxConcurrent is the maximum number of concurrent compilation workers
+	MaxConcurrent uint `mapstructure:"max-concurrent"`
 }
 
 // JSONRPCConfig defines configuration for the EVM RPC server.
@@ -280,7 +262,51 @@ func DefaultEVMConfig() *EVMConfig {
 		MinTip:                  DefaultEVMMinTip,
 		GethMetricsAddress:      DefaultGethMetricsAddress,
 		Mempool:                 DefaultMempoolConfig(),
+		FFIEnabled:              DefaultFFIEnabled,
+		Compiler: &CompilerConfig{
+			Threshold:     DefaultCompilerThreshold,
+			MaxConcurrent: DefaultCompilerMaxConcurrent,
+		},
 	}
+}
+
+// DefaultMempoolConfig returns the default mempool configuration
+func DefaultMempoolConfig() MempoolConfig {
+	return MempoolConfig{
+		PriceLimit:   1,             // Minimum gas price of 1 wei
+		PriceBump:    10,            // 10% price bump to replace transaction
+		AccountSlots: 16,            // 16 executable transaction slots per account
+		GlobalSlots:  5120,          // 4096 + 1024 = 5120 global executable slots
+		AccountQueue: 64,            // 64 non-executable transaction slots per account
+		GlobalQueue:  1024,          // 1024 global non-executable slots
+		Lifetime:     3 * time.Hour, // 3 hour lifetime for queued transactions
+	}
+}
+
+// Validate returns an error if the mempool configuration is invalid
+func (c MempoolConfig) Validate() error {
+	if c.PriceLimit < 1 {
+		return fmt.Errorf("price limit must be at least 1, got %d", c.PriceLimit)
+	}
+	if c.PriceBump < 1 {
+		return fmt.Errorf("price bump must be at least 1, got %d", c.PriceBump)
+	}
+	if c.AccountSlots < 1 {
+		return fmt.Errorf("account slots must be at least 1, got %d", c.AccountSlots)
+	}
+	if c.GlobalSlots < 1 {
+		return fmt.Errorf("global slots must be at least 1, got %d", c.GlobalSlots)
+	}
+	if c.AccountQueue < 1 {
+		return fmt.Errorf("account queue must be at least 1, got %d", c.AccountQueue)
+	}
+	if c.GlobalQueue < 1 {
+		return fmt.Errorf("global queue must be at least 1, got %d", c.GlobalQueue)
+	}
+	if c.Lifetime < 1 {
+		return fmt.Errorf("lifetime must be at least 1, got %s", c.Lifetime)
+	}
+	return nil
 }
 
 // Validate returns an error if the tracer type is invalid.

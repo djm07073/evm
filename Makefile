@@ -34,6 +34,68 @@ EVMD_DIR      := evmd
 EVMD_MAIN_PKG := ./cmd/evmd
 
 ###############################################################################
+###                        Build Rust Library (revmapi)                     ###
+###############################################################################
+
+# Shared library naming based on platform
+SHARED_LIB_SRC = "" # File name as created by Rust build system
+SHARED_LIB_DST = "" # File name that we store
+
+# LLVM configuration for revmc (requires LLVM 18+)
+ifeq ($(OS),Windows_NT)
+	# not supported
+else
+	UNAME_S := $(shell uname -s)
+	ifeq ($(UNAME_S),Linux)
+		SHARED_LIB_SRC = librevmapi.so
+		SHARED_LIB_DST = librevmapi.$(shell rustc --print cfg | grep target_arch | cut -d '"' -f 2).so
+		# Try llvm-config-18, then any llvm-config
+		LLVM_PREFIX := $(shell llvm-config-18 --prefix 2>/dev/null || llvm-config --prefix 2>/dev/null)
+	endif
+	ifeq ($(UNAME_S),Darwin)
+		SHARED_LIB_SRC = librevmapi.dylib
+		SHARED_LIB_DST = librevmapi.dylib
+		# Try llvm@18 first, then fallback to default llvm, get prefix via llvm-config
+		LLVM_BREW_PATH := $(shell brew --prefix llvm@18 2>/dev/null || brew --prefix llvm 2>/dev/null)
+		ifneq ($(LLVM_BREW_PATH),)
+			LLVM_CONFIG := $(LLVM_BREW_PATH)/bin/llvm-config
+			LLVM_PREFIX := $(shell $(LLVM_CONFIG) --prefix 2>/dev/null)
+		endif
+	endif
+endif
+
+# Build Shared library in debug mode (for development)
+build-shared-library-debug:
+	@echo "🦀 Building Shared library (debug mode)..."
+	@cd librevm && \
+	export LLVM_SYS_180_PREFIX="$(LLVM_PREFIX)" && \
+	cargo build
+	@mkdir -p x/vm/api
+	@cp -fp librevm/target/debug/$(SHARED_LIB_SRC) x/vm/api/$(SHARED_LIB_DST)
+	@cp -fp librevm/bindings.h x/vm/api/bindings.h
+	@echo "Shared library copied to x/vm/api/$(SHARED_LIB_DST)"
+
+# Build Shared library in release mode (for production)
+build-shared-library-release:
+	@echo "🦀 Building Shared library (release mode)..."
+	@cd librevm && \
+	export LLVM_SYS_180_PREFIX="$(LLVM_PREFIX)" && \
+	cargo build --release
+	@mkdir -p x/vm/api
+	@cp -fp librevm/target/release/$(SHARED_LIB_SRC) x/vm/api/$(SHARED_LIB_DST)
+	@cp -fp librevm/bindings.h x/vm/api/bindings.h
+	@echo "Shared library copied to x/vm/api/$(SHARED_LIB_DST)"
+
+# Clean Rust build artifacts
+clean-shared-library:
+	@echo "🧹 Cleaning Rust build artifacts..."
+	@cd librevm && cargo clean
+	@rm -f x/vm/api/$(SHARED_LIB_DST)
+	@rm -f x/vm/api/bindings.h
+
+.PHONY: build-shared-library-debug build-shared-library-release clean-shared-library
+
+###############################################################################
 ###                        Build & Install evmd                             ###
 ###############################################################################
 
